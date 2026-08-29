@@ -10,6 +10,7 @@ export type GroupRole = "owner" | "admin" | "member";
 export type ResourceScope = "private" | "group";
 export type ResourceKind = "document" | "message" | "task_artifact";
 export type GrantDuration = "persistent" | "run" | "task";
+export type ResourceGrantAction = "read" | "process";
 export type AuthorizationAction =
   | "agent:create"
   | "agent:use"
@@ -17,6 +18,8 @@ export type AuthorizationAction =
   | "member:manage"
   | "resource:create"
   | "resource:read"
+  | "resource:process"
+  | "resource:disclose"
   | "resource:publish"
   | "artifact:propose"
   | "artifact:approve"
@@ -25,6 +28,16 @@ export type AuthorizationAction =
   | "grant:create"
   | "grant:revoke";
 export type AuthorizationDecisionValue = "allow" | "deny";
+
+export interface AuthorizationRequestEvidence {
+  source: "agent_runtime" | "control_plane";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
+  path: string;
+  command: string | null;
+  body: Record<string, string> | null;
+  responseStatus: number;
+  redacted: true;
+}
 export type CoordinationKind = "group_chat" | "task";
 export type CoordinationMode = "manual" | "automatic";
 export type ContextImportMode = "none" | "full" | "selected";
@@ -254,7 +267,7 @@ export interface ResourceGrant {
   resourceId: string;
   granteeAgentId: string;
   grantedByUserId: string;
-  action: "read";
+  action: ResourceGrantAction;
   duration: GrantDuration;
   runId: string | null;
   taskId: string | null;
@@ -278,6 +291,7 @@ export interface AuthorizationDecision {
   reasonCode: string;
   policyVersion: "bouncer-v1";
   detail: string;
+  requestEvidence?: AuthorizationRequestEvidence | undefined;
 }
 
 export interface CoordinationSession {

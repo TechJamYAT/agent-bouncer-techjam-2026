@@ -1352,13 +1352,14 @@ describe("Multi-Agent coordination Runtime", () => {
     });
 
     await expect(
-      service.readResourceAsAgent(
+      service.processResourceAsAgent(
         DEMO_USER_IDS.alice,
         agent.id,
         DEMO_RESOURCE_IDS.alicePrivate,
+        "launch-risk-check",
         { taskId: snapshot.session.id },
       ),
-    ).resolves.toMatchObject({ decision: { reasonCode: "TASK_SCOPED_GRANT" } });
+    ).resolves.toMatchObject({ decision: { reasonCode: "TASK_SCOPED_PROCESS_GRANT" } });
 
     await service.advanceCoordinationSession(
       DEMO_USER_IDS.alice,
@@ -1370,15 +1371,108 @@ describe("Multi-Agent coordination Runtime", () => {
     ).toBe("completed");
 
     await expect(
-      service.readResourceAsAgent(
+      service.processResourceAsAgent(
         DEMO_USER_IDS.alice,
         agent.id,
         DEMO_RESOURCE_IDS.alicePrivate,
+        "launch-risk-check",
         { taskId: snapshot.session.id },
       ),
     ).rejects.toMatchObject({ message: "Access Denied: PRIVATE_GRANT_REQUIRED" });
     expect(service.listDecisions(DEMO_USER_IDS.alice).map((item) => item.reasonCode))
       .toContain("TASK_COMPLETED");
+  });
+
+  it("lets Case process Bob's task data for Alice without disclosing Bob's source", async () => {
+    let service!: AgentService;
+    let runtimeResult = "";
+    service = await makeService({
+      run: async (request) => {
+        const token = request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "";
+        const processed = await service.processResourceForRuntimeByReference(token, {
+          ownerUsername: "bob",
+          title: "Bob — Private Launch Notes",
+          operation: "launch-risk-check",
+        });
+        runtimeResult = JSON.stringify(processed);
+        await expect(
+          service.discloseResourceForRuntimeByReference(token, {
+            ownerUsername: "bob",
+            title: "Bob — Private Launch Notes",
+          }),
+        ).rejects.toMatchObject({
+          statusCode: 403,
+          message: "Access Denied: RESOURCE_DISCLOSURE_DENIED",
+        });
+        await expect(
+          service.requestOwnerDisclosureForRuntime(token, { ownerUsername: "bob" }),
+        ).rejects.toMatchObject({
+          statusCode: 403,
+          message: "Access Denied: RESOURCE_DISCLOSURE_DENIED",
+        });
+        return {
+          output: "Risk signals are present; the private source cannot be disclosed.",
+          threadId: "case-private-processing-thread",
+          usage: null,
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const caseAgent = await service.createAgent(
+      {
+        name: "Case",
+        scope: "group",
+        groupId: DEMO_GROUP_IDS.alpha,
+      },
+      DEMO_USER_IDS.alice,
+    );
+    const task = await service.createCoordinationSession(DEMO_USER_IDS.alice, {
+      groupId: DEMO_GROUP_IDS.alpha,
+      kind: "task",
+      mode: "manual",
+      title: "Blind launch-risk review",
+      objective: "Check Bob's named private notes for launch risk without revealing the source.",
+      participantAgentIds: [caseAgent.id],
+    });
+    const grant = await service.createGrant(DEMO_USER_IDS.bob, {
+      agentId: caseAgent.id,
+      resourceId: DEMO_RESOURCE_IDS.bobPrivate,
+      action: "process",
+      duration: "task",
+      taskId: task.session.id,
+    });
+    expect(grant.action).toBe("process");
+
+    const launched = await service.advanceCoordinationSession(
+      DEMO_USER_IDS.alice,
+      task.session.id,
+      task.session.version,
+    );
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(runtimeResult).toContain("risk_signals_present");
+    expect(runtimeResult).toContain("aggregate_only");
+    expect(runtimeResult).not.toContain("Beta launch assumptions");
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "resource:process",
+        decision: "allow",
+        reasonCode: "TASK_SCOPED_PROCESS_GRANT",
+      }),
+      expect.objectContaining({
+        action: "resource:disclose",
+        decision: "deny",
+        reasonCode: "PRIVATE_DISCLOSURE_RECIPIENT_DENIED",
+        requestEvidence: expect.objectContaining({
+          source: "agent_runtime",
+          method: "POST",
+          path: "/api/runtime/resources/disclose",
+          body: { ownerUsername: "bob" },
+          responseStatus: 403,
+          redacted: true,
+        }),
+      }),
+    ]));
   });
 
   it("runs independent Agents in order and injects earlier output into the later context", async () => {
