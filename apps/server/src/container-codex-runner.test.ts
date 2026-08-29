@@ -24,6 +24,10 @@ describe("Container Codex runner", () => {
         workspacePath: "/tmp/agent-workspace",
         prompt: "write a small program",
         threadId: null,
+        runtimeEnvironment: {
+          LAUNCHPAD_RUNTIME_TOKEN: "run-secret-that-must-not-appear-in-argv",
+          LAUNCHPAD_CONTROL_PLANE_URL: "http://host.docker.internal:3000",
+        },
       },
       config,
     );
@@ -39,7 +43,10 @@ describe("Container Codex runner", () => {
     expect(args).toContain("/workspace");
     expect(args).toContain("io.codejam.instance-id=test-instance");
     expect(args).toContain("keep-id");
+    expect(args).toContain("LAUNCHPAD_RUNTIME_TOKEN");
+    expect(args).toContain("LAUNCHPAD_CONTROL_PLANE_URL");
     expect(args).not.toContain("secret-that-must-not-appear-in-argv");
+    expect(args).not.toContain("run-secret-that-must-not-appear-in-argv");
   });
 
   it("resumes a thread inside the mounted Runtime workspace", () => {

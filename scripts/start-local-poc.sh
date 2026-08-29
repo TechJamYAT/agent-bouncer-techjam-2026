@@ -4,12 +4,39 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
+# Keep local credentials outside Git, but load them automatically when present.
+# This makes `npm run poc` behave like the Compose/deployment entry points.
+if [[ -f "$repo_dir/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$repo_dir/.env"
+  set +a
+fi
+
 runtime_image="${CONTAINER_RUNTIME_IMAGE:-volc-agent-runtime:local}"
 runtime_base_image="${CONTAINER_RUNTIME_BASE_IMAGE:-node:22-bookworm-slim}"
 runtime_apt_mirror="${CONTAINER_APT_MIRROR:-}"
 runtime_apt_security_mirror="${CONTAINER_APT_SECURITY_MIRROR:-}"
 runtime_apt_packages="${CONTAINER_RUNTIME_APT_PACKAGES:-ca-certificates git ripgrep}"
 codex_sandbox_mode="${CODEX_SANDBOX_MODE:-workspace-write}"
+
+# NUS SOCaaS is OpenAI-compatible. Accept its variable names as local aliases
+# so participants do not need to duplicate the same credential as ARK_*.
+if [[ -z "${ARK_API_KEY:-}" && -z "${NUS_API_KEY:-}" && -t 0 ]]; then
+  printf 'NUS API Key: ' >&2
+  IFS= read -r -s NUS_API_KEY
+  printf '\n' >&2
+  export NUS_API_KEY
+fi
+if [[ -z "${ARK_API_KEY:-}" && -n "${NUS_API_KEY:-}" ]]; then
+  export ARK_API_KEY="$NUS_API_KEY"
+fi
+if [[ -z "${ARK_BASE_URL:-}" && -n "${NUS_API_KEY:-}" ]]; then
+  export ARK_BASE_URL="${NUS_URL:-https://soclaas-api.comp.nus.edu.sg/v1}"
+fi
+if [[ -z "${ARK_MODEL:-}" && -n "${NUS_API_KEY:-}" ]]; then
+  export ARK_MODEL="${NUS_MODEL:-qwen3.6:27b}"
+fi
 
 log() {
   printf '[local-poc] %s\n' "$*" >&2
@@ -64,10 +91,49 @@ detect_engine() {
 }
 
 if [[ -z "${ARK_API_KEY:-}" || -z "${ARK_MODEL:-}" ]]; then
-  log "ARK_API_KEY and ARK_MODEL are required."
-  log "Example: ARK_API_KEY=key ARK_MODEL=ep-id ./scripts/start-local-poc.sh"
+  log "ARK_API_KEY/ARK_MODEL or NUS_API_KEY/NUS_MODEL are required."
   exit 2
 fi
+
+export HOST="${HOST:-127.0.0.1}"
+export PORT="${PORT:-3000}"
+
+release_stale_control_plane() {
+  command -v lsof >/dev/null 2>&1 || return 0
+
+  local port_pids process_cwd process_pid
+  port_pids="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  [[ -z "$port_pids" ]] && return 0
+
+  while IFS= read -r process_pid; do
+    [[ -z "$process_pid" ]] && continue
+    process_cwd="$(lsof -a -p "$process_pid" -d cwd -Fn 2>/dev/null \
+      | sed -n 's/^n//p' | head -n 1)"
+
+    if [[ "$process_cwd" != "$repo_dir" && "$process_cwd" != "$repo_dir/apps/server" ]]; then
+      log "Port $PORT is already used by PID $process_pid from ${process_cwd:-an unknown directory}."
+      log "Refusing to stop a process that does not belong to this project."
+      return 1
+    fi
+
+    log "Stopping stale local control plane PID $process_pid on port $PORT."
+    kill -TERM "$process_pid" 2>/dev/null || {
+      log "Could not stop stale PID $process_pid. Stop it manually and retry."
+      return 1
+    }
+
+    for _ in {1..50}; do
+      kill -0 "$process_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$process_pid" 2>/dev/null; then
+      log "PID $process_pid did not stop after 5 seconds."
+      return 1
+    fi
+  done <<<"$port_pids"
+}
+
+release_stale_control_plane
 
 command -v node >/dev/null 2>&1 || {
   log "Node.js 22+ is required to run the local control plane."
@@ -146,8 +212,6 @@ if [[ "$codex_sandbox_mode" == "workspace-write" ]] \
 fi
 
 export NODE_ENV=production
-export HOST="${HOST:-127.0.0.1}"
-export PORT="${PORT:-3000}"
 export CODEX_SANDBOX_MODE="$codex_sandbox_mode"
 export RUNTIME_PROVIDER=container
 export CONTAINER_ENGINE="$engine"

@@ -32,12 +32,15 @@ const envSchema = z.object({
     .max(48)
     .regex(/^[a-zA-Z0-9_.-]+$/)
     .default("default"),
+  RUNTIME_CONTROL_PLANE_URL: z.string().url().optional(),
   APP_AUTH_TOKEN: z
     .string()
     .trim()
     .max(128)
     .regex(/^[A-Za-z0-9._~-]*$/, "APP_AUTH_TOKEN must use URL-safe characters")
     .optional(),
+  DEMO_USER_PASSWORD: z.string().min(8).max(128).default("launchpad-demo"),
+  SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(168).default(12),
   ARK_API_KEY: z.string().optional(),
   ARK_MODEL: z.string().optional(),
   ARK_BASE_URL: z
@@ -50,7 +53,14 @@ const envSchema = z.object({
 export type AppConfig = ReturnType<typeof loadConfig>;
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
-  const env = envSchema.parse(environment);
+  const preferConfigured = (primary?: string, fallback?: string) =>
+    primary?.trim() ? primary : fallback;
+  const env = envSchema.parse({
+    ...environment,
+    ARK_API_KEY: preferConfigured(environment.ARK_API_KEY, environment.NUS_API_KEY),
+    ARK_MODEL: preferConfigured(environment.ARK_MODEL, environment.NUS_MODEL),
+    ARK_BASE_URL: preferConfigured(environment.ARK_BASE_URL, environment.NUS_URL),
+  });
   const authToken = env.APP_AUTH_TOKEN?.trim() ?? "";
   const loopbackHosts = new Set(["127.0.0.1", "::1", "localhost"]);
   if (env.NODE_ENV === "production" && !loopbackHosts.has(env.HOST)) {
@@ -64,6 +74,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     typeof process.getuid === "function" && typeof process.getgid === "function"
       ? process.getuid() + ":" + process.getgid()
       : "1000:1000";
+  const loopbackControlPlaneHost = loopbackHosts.has(env.HOST) ? env.HOST : "127.0.0.1";
+  const runtimeControlPlaneUrl =
+    env.RUNTIME_CONTROL_PLANE_URL?.replace(/\/+$/, "") ??
+    (env.RUNTIME_PROVIDER === "container"
+      ? `http://host.docker.internal:${env.PORT}`
+      : `http://${loopbackControlPlaneHost}:${env.PORT}`);
   return {
     host: env.HOST,
     port: env.PORT,
@@ -83,7 +99,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     containerPidsLimit: env.CONTAINER_PIDS_LIMIT,
     containerUser: env.CONTAINER_USER?.trim() || defaultContainerUser,
     runtimeInstanceId: env.RUNTIME_INSTANCE_ID,
+    runtimeControlPlaneUrl,
     authToken,
+    demoUserPassword: env.DEMO_USER_PASSWORD,
+    sessionTtlHours: env.SESSION_TTL_HOURS,
     arkApiKey: env.ARK_API_KEY?.trim() ?? "",
     arkModel: env.ARK_MODEL?.trim() ?? "",
     arkBaseUrl: env.ARK_BASE_URL.replace(/\/+$/, ""),

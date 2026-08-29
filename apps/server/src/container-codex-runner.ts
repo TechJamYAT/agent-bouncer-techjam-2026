@@ -41,6 +41,9 @@ export function buildContainerRunArgs(
 ): string[] {
   const name = containerName(request.agentId, config.runtimeInstanceId);
   const engineName = config.containerEngine.split(/[\\/]/).at(-1)?.toLowerCase();
+  const runtimeEnvironmentNames = Object.keys(request.runtimeEnvironment ?? {})
+    .filter((name) => /^LAUNCHPAD_[A-Z0-9_]+$/.test(name))
+    .sort();
   return [
     "run",
     "--rm",
@@ -54,6 +57,9 @@ export function buildContainerRunArgs(
     "--label",
     "io.codejam.instance-id=" + config.runtimeInstanceId,
     ...(engineName === "podman" ? ["--userns", "keep-id"] : []),
+    ...(engineName === "docker"
+      ? ["--add-host", "host.docker.internal:host-gateway"]
+      : []),
     "--network",
     "bridge",
     "--security-opt",
@@ -76,6 +82,7 @@ export function buildContainerRunArgs(
     "HOME=/tmp",
     "--env",
     "NO_COLOR=1",
+    ...runtimeEnvironmentNames.flatMap((name) => ["--env", name]),
     "--mount",
     "type=bind,src=" + request.workspacePath + ",dst=/workspace",
     "--mount",
@@ -147,7 +154,7 @@ export class ContainerCodexRunner implements AgentRunner {
       buildContainerRunArgs(request, this.config),
       {
         cwd: request.workspacePath,
-        env: this.childEnvironment(),
+        env: this.childEnvironment(request.runtimeEnvironment),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -235,7 +242,7 @@ export class ContainerCodexRunner implements AgentRunner {
     }
   }
 
-  private childEnvironment(): NodeJS.ProcessEnv {
+  private childEnvironment(runtimeEnvironment: Record<string, string> = {}): NodeJS.ProcessEnv {
     const environment: NodeJS.ProcessEnv = {
       ARK_API_KEY: this.config.arkApiKey,
       NO_COLOR: "1",
@@ -249,6 +256,9 @@ export class ContainerCodexRunner implements AgentRunner {
       "XDG_RUNTIME_DIR",
     ] as const) {
       if (process.env[name] !== undefined) environment[name] = process.env[name];
+    }
+    for (const [name, value] of Object.entries(runtimeEnvironment)) {
+      if (/^LAUNCHPAD_[A-Z0-9_]+$/.test(name)) environment[name] = value;
     }
     return environment;
   }

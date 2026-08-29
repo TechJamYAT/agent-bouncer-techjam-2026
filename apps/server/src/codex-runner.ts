@@ -132,7 +132,7 @@ export class CodexRunner implements AgentRunner {
     const args = buildCodexArgs(request, this.config.codexSandboxMode);
     const child = spawn(this.config.codexBin, args, {
       cwd: request.workspacePath,
-      env: this.childEnvironment(),
+      env: this.childEnvironment(request.runtimeEnvironment),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const settled = new Promise<void>((resolve) => {
@@ -239,7 +239,7 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  private childEnvironment(): NodeJS.ProcessEnv {
+  private childEnvironment(runtimeEnvironment: Record<string, string> = {}): NodeJS.ProcessEnv {
     const inheritedNames = [
       "PATH",
       "HOME",
@@ -261,6 +261,9 @@ export class CodexRunner implements AgentRunner {
     };
     for (const name of inheritedNames) {
       if (process.env[name] !== undefined) environment[name] = process.env[name];
+    }
+    for (const [name, value] of Object.entries(runtimeEnvironment)) {
+      if (/^LAUNCHPAD_[A-Z0-9_]+$/.test(name)) environment[name] = value;
     }
     return environment;
   }

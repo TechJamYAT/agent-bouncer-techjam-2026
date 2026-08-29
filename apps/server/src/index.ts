@@ -1,10 +1,21 @@
 import path from "node:path";
+import { loadEnvFile } from "node:process";
+import { fileURLToPath } from "node:url";
 import { AgentService } from "./agent-service.js";
 import { createApp } from "./app.js";
 import { loadConfig, writeCodexConfig } from "./config.js";
 import { createRunner } from "./runner-factory.js";
 import { JsonStore } from "./store.js";
 import { WorkspaceManager } from "./workspace.js";
+
+// Keep local credentials outside Git while making the standard `npm run dev`
+// entry point work without requiring users to export every variable manually.
+const repositoryEnvPath = fileURLToPath(new URL("../../../.env", import.meta.url));
+try {
+  loadEnvFile(repositoryEnvPath);
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
 
 const config = loadConfig();
 await writeCodexConfig(config);
