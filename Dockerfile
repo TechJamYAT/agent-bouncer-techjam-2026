@@ -27,8 +27,8 @@ RUN if [ -n "$DEBIAN_SECURITY_MIRROR" ]; then \
         -exec sed -i "s|http://deb.debian.org/debian|$DEBIAN_MIRROR|g" {} +; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git ripgrep \
-    && npm install --global @openai/codex@0.111.0 \
+    && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
+    && npm install --global @openai/codex@0.132.0 \
     && codex --version \
     && rm -rf /var/lib/apt/lists/*
 

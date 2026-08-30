@@ -271,10 +271,14 @@ export const api = {
     body: JSON.stringify(body),
   }),
   grants: () => request<{ grants: ResourceGrant[] }>("/api/grants"),
-  grantResource: (resourceId: string, agentId: string) =>
+  grantResource: (
+    resourceId: string,
+    agentId: string,
+    options: { duration?: "persistent" | "run" | "task"; taskId?: string; action?: "read" | "process" } = {},
+  ) =>
     request<{ grant: ResourceGrant }>(`/api/resources/${resourceId}/grants`, {
       method: "POST",
-      body: JSON.stringify({ agentId, duration: "persistent" }),
+      body: JSON.stringify({ agentId, duration: "persistent", ...options }),
     }),
   revokeGrant: (grantId: string) =>
     request<{ grant: ResourceGrant }>(`/api/grants/${grantId}`, { method: "DELETE" }),

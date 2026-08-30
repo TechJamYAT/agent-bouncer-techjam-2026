@@ -18,6 +18,18 @@ interface ProcessStage {
   detail: string;
   state: ProcessState;
   time: string | null;
+  requests: ProcessRequestDetail[];
+}
+
+interface ProcessRequestDetail {
+  id: string;
+  title: string;
+  kind: "actual" | "internal" | "expected";
+  command: string | null;
+  method: string | null;
+  path: string;
+  body: Record<string, string> | null;
+  response: string;
 }
 
 const terminalStatuses = new Set<AgentRun["status"]>(["completed", "failed", "cancelled"]);
@@ -41,6 +53,62 @@ function runStateLabel(status: AgentRun["status"]): string {
   if (status === "completed") return "处理完成";
   if (status === "cancelled") return "已取消";
   return "处理失败";
+}
+
+function requestForDecision(decision: AuthorizationDecision): ProcessRequestDetail {
+  const fallbackPath = decision.action === "resource:process"
+    ? "/api/runtime/resources/process"
+    : decision.action === "resource:disclose"
+      ? "/api/runtime/resources/disclose"
+      : "/api/runtime/resources/read";
+  const fallbackCommand = decision.action === "resource:process"
+    ? 'node .launchpad/tools/vault.mjs assess --owner <username> --title "[PROTECTED_TITLE]"'
+    : decision.action === "resource:disclose"
+      ? 'node .launchpad/tools/vault.mjs disclose --owner <username> [--title "[PROTECTED_TITLE]"]'
+      : 'node .launchpad/tools/vault.mjs read --owner <username> --title "[PROTECTED_TITLE]"';
+  const evidence = decision.requestEvidence;
+  return {
+    id: decision.id,
+    title: `${decision.executingAgentName ?? "Agent"} 发出的实际请求`,
+    kind: "actual",
+    command: evidence?.command ?? fallbackCommand,
+    method: evidence?.method ?? "POST",
+    path: evidence?.path ?? fallbackPath,
+    body: evidence?.body ?? {
+      ownerUsername: "<username>",
+      title: "[PROTECTED_TITLE]",
+    },
+    response: `${evidence?.responseStatus ?? (decision.decision === "allow" ? 200 : 403)} · ${decision.decision === "allow" ? "ALLOW" : "DENY"} · ${decision.reasonCode}`,
+  };
+}
+
+function RequestDetails({ requests }: { requests: ProcessRequestDetail[] }) {
+  const hasActual = requests.some((request) => request.kind === "actual");
+  return (
+    <details className="runtime-process-request-details">
+      <summary>
+        <span>查看请求代码与格式</span>
+        <em>{hasActual ? `${requests.filter((request) => request.kind === "actual").length} 个实际请求` : "默认折叠"}</em>
+      </summary>
+      <div className="runtime-process-request-list">
+        {requests.map((request) => (
+          <section className={`runtime-process-request request-${request.kind}`} key={request.id}>
+            <header>
+              <strong>{request.title}</strong>
+              <span>{request.kind === "actual" ? "实际发生" : request.kind === "internal" ? "内部调用" : "预期格式·未发生"}</span>
+            </header>
+            {request.command && <pre><code>{request.command}</code></pre>}
+            <div className="runtime-process-http-line">
+              {request.method && <b>{request.method}</b>}
+              <code>{request.path}</code>
+            </div>
+            {request.body && <pre><code>{JSON.stringify(request.body, null, 2)}</code></pre>}
+            <small>{request.response}</small>
+          </section>
+        ))}
+      </div>
+    </details>
+  );
 }
 
 export function RuntimeProcessWindow({
@@ -70,8 +138,15 @@ export function RuntimeProcessWindow({
   const grantDecisions = runDecisions.filter(
     (decision) => decision.action === "grant:create" || decision.action === "grant:revoke",
   );
-  const readDecisions = runDecisions.filter((decision) => decision.action === "resource:read");
-  const hasDeniedRead = readDecisions.some((decision) => decision.decision === "deny");
+  const accessDecisions = runDecisions.filter(
+    (decision) => decision.action === "resource:read" || decision.action === "resource:process",
+  );
+  const disclosureDecisions = runDecisions.filter(
+    (decision) => decision.action === "resource:disclose",
+  );
+  const hasDeniedAccess = accessDecisions.some((decision) => decision.decision === "deny");
+  const accessRequests = accessDecisions.map(requestForDecision);
+  const disclosureRequests = disclosureDecisions.map(requestForDecision);
 
   const stages: ProcessStage[] = [
     {
@@ -80,6 +155,16 @@ export function RuntimeProcessWindow({
       detail: `后端已创建 Run ${shortId(run.id)}，并绑定当前对话。`,
       state: "success",
       time: run.createdAt,
+      requests: [{
+        id: "accepted-request",
+        title: "浏览器提交任务",
+        kind: "actual",
+        command: `fetch("/api/agents/${agent.id}/messages", { method: "POST", body: JSON.stringify(payload) })`,
+        method: "POST",
+        path: `/api/agents/${agent.id}/messages`,
+        body: { content: "[本次对话内容]", resourceReferences: "[已附加资源引用]" },
+        response: `202 Accepted · Run ${shortId(run.id)}`,
+      }],
     },
     {
       id: "identity",
@@ -89,6 +174,20 @@ export function RuntimeProcessWindow({
         : "等待 Runtime 启动并签发当前 Run 的短期凭证。",
       state: run.startedAt ? "success" : "running",
       time: run.startedAt,
+      requests: [{
+        id: "identity-request",
+        title: "Launchpad 启动 Agent Runtime",
+        kind: "internal",
+        command: "runner.run({ prompt, workspacePath, runtimeEnvironment })",
+        method: null,
+        path: "AgentRunner.run",
+        body: {
+          LAUNCHPAD_RUN_ID: shortId(run.id),
+          LAUNCHPAD_AGENT_ID: shortId(agent.id),
+          LAUNCHPAD_RUNTIME_TOKEN: "[REDACTED_RUN_TOKEN]",
+        },
+        response: run.startedAt ? "Runtime 已接收运行身份" : "等待 Runtime 启动",
+      }],
     },
     ...(grantDecisions.some((decision) => decision.action === "grant:create")
       ? [{
@@ -99,20 +198,65 @@ export function RuntimeProcessWindow({
             : "资料所有者已授予仅限本次运行的读取权限。",
           state: "success" as const,
           time: grantDecisions.at(-1)?.occurredAt ?? null,
+          requests: [{
+            id: "grant-request",
+            title: "控制面附加临时授权",
+            kind: "internal" as const,
+            command: "policy.attachRunOrTaskGrant({ resourceId, agentId, scope })",
+            method: null,
+            path: "Bouncer grant boundary",
+            body: { resourceId: "[PROTECTED_RESOURCE_ID]", agentId: shortId(agent.id), scope: "run_or_task" },
+            response: grantDecisions.at(-1)?.reasonCode ?? "授权已记录",
+          }],
         }]
       : []),
     {
       id: "knowledge",
-      title: "资料库访问与策略判断",
-      detail: readDecisions.length > 0
-        ? `Bouncer 已记录 ${readDecisions.length} 次读取判断；${hasDeniedRead ? "其中存在拒绝。" : "全部允许。"}`
+      title: "私有资料读取或密封处理",
+      detail: accessDecisions.length > 0
+        ? `Bouncer 已记录 ${accessDecisions.length} 次真实后端访问；${hasDeniedAccess ? "其中存在拒绝。" : "全部允许。"}`
         : isTerminal
           ? "后端未收到资料库读取请求；不能把 Agent 正文中的尝试描述视为已完成鉴权。"
           : "等待 Agent 调用受保护资料库；只有抵达后端的请求才会留下权限证据。",
-      state: readDecisions.length > 0
-        ? hasDeniedRead ? "denied" : "success"
+      state: accessDecisions.length > 0
+        ? hasDeniedAccess ? "denied" : "success"
         : isTerminal ? "neutral" : "running",
-      time: readDecisions.at(-1)?.occurredAt ?? null,
+      time: accessDecisions.at(-1)?.occurredAt ?? null,
+      requests: accessRequests.length > 0 ? accessRequests : [{
+        id: "knowledge-expected",
+        title: "Agent 资料读取/密封处理格式",
+        kind: "expected",
+        command: 'node .launchpad/tools/vault.mjs assess --owner <username> --title "[PROTECTED_TITLE]"',
+        method: "POST",
+        path: "/api/runtime/resources/process",
+        body: { ownerUsername: "<username>", title: "[PROTECTED_TITLE]", operation: "launch-risk-check" },
+        response: isTerminal ? "本次 Run 未发出该请求" : "等待 Agent 发出请求",
+      }],
+    },
+    {
+      id: "disclosure",
+      title: "向当前用户披露资料",
+      detail: disclosureDecisions.length > 0
+        ? disclosureDecisions.some((decision) => decision.decision === "deny")
+          ? "Agent 发起了真实披露请求；后端独立鉴权后拒绝向当前用户转发。"
+          : "Agent 发起了真实披露请求，当前用户通过独立鉴权。"
+        : isTerminal
+          ? "本次 Run 没有发起披露请求。"
+          : "若用户要求复制、转发或展示私有资料，Agent 必须调用披露接口。",
+      state: disclosureDecisions.length > 0
+        ? disclosureDecisions.some((decision) => decision.decision === "deny") ? "denied" : "success"
+        : isTerminal ? "neutral" : "running",
+      time: disclosureDecisions.at(-1)?.occurredAt ?? null,
+      requests: disclosureRequests.length > 0 ? disclosureRequests : [{
+        id: "disclosure-expected",
+        title: "Agent 披露请求格式",
+        kind: "expected",
+        command: 'node .launchpad/tools/vault.mjs disclose --owner <username> [--title "[PROTECTED_TITLE]"]',
+        method: "POST",
+        path: "/api/runtime/resources/disclose",
+        body: { ownerUsername: "<username>", title: "[可省略或已脱敏]" },
+        response: isTerminal ? "本次 Run 未发出该请求" : "等待 Agent 发出请求",
+      }],
     },
     {
       id: "result",
@@ -130,6 +274,16 @@ export function RuntimeProcessWindow({
           ? "failed"
           : "running",
       time: run.completedAt,
+      requests: [{
+        id: "result-request",
+        title: "控制面提交运行结果",
+        kind: "internal",
+        command: "store.mutate(run => finalize(run)); runtimeCredentials.delete(tokenHash)",
+        method: null,
+        path: "Run finalization",
+        body: { status: run.status, output: "[REDACTED_CONVERSATION_OUTPUT]", runtimeToken: "[REVOKED]" },
+        response: isTerminal ? `Run ${run.status}` : "等待 Run 结束",
+      }],
     },
   ];
 
@@ -209,9 +363,9 @@ export function RuntimeProcessWindow({
               <div>
                 <header><strong>{stage.title}</strong><time>{timeLabel(stage.time)}</time></header>
                 <p>{stage.detail}</p>
-                {stage.id === "knowledge" && readDecisions.length > 0 && (
+                {(stage.id === "knowledge" || stage.id === "disclosure") && (
                   <div className="runtime-process-decisions">
-                    {readDecisions.map((decision) => (
+                    {(stage.id === "knowledge" ? accessDecisions : disclosureDecisions).map((decision) => (
                       <div className={`runtime-process-decision decision-${decision.decision}`} key={decision.id}>
                         <span>{decision.decision === "allow" ? "允许" : "拒绝"}</span>
                         <strong>{decision.targetLabel}</strong>
@@ -220,13 +374,14 @@ export function RuntimeProcessWindow({
                     ))}
                   </div>
                 )}
+                <RequestDetails requests={stage.requests} />
               </div>
             </article>
           ))}
         </div>
 
         <footer className="runtime-process-footer">
-          <span>仅展示后端状态、主体和决策结果</span>
+          <span>可展开查看脱敏后的实际请求格式</span>
           <strong>不会展示密钥或私有资料内容</strong>
         </footer>
       </div>}

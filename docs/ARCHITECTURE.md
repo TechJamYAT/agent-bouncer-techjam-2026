@@ -68,6 +68,21 @@ Specific denial reasons are persisted for audit, while inaccessible and
 nonexistent resource references produce the same Runtime response so private
 titles cannot be confirmed by probing.
 
+### Processing is not disclosure
+
+Task-scoped grants to group Agents are purpose-limited `process` grants. The
+protected processor may inspect the resource inside the Bouncer boundary and
+return a fixed aggregate (`risk_signals_present` or
+`no_risk_signals_found`), but it never returns source text to the user-facing
+Runtime. A request to quote, copy, summarize in detail, or forward the source
+must use the separate disclosure action. Disclosure is authorized against the
+initiating human as the recipient, so a task initiated by Alice can process a
+Bob-owned resource with Bob's grant while still denying disclosure to Alice.
+
+Both actions are audited independently as `resource:process` and
+`resource:disclose`. This avoids relying on an LLM prompt as the confidentiality
+boundary and provides a real allow-then-deny backend trace for the demo.
+
 ### AgentService
 
 Coordinates authenticated humans, Agent principals, conversations, task projects,
