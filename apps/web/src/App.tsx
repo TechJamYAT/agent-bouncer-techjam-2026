@@ -114,11 +114,9 @@ export default function App() {
   const [resourceForm, setResourceForm] = useState<ResourceForm>(emptyResourceForm);
   const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null);
   const [grantAgentId, setGrantAgentId] = useState("");
-  const [taskGrantTarget, setTaskGrantTarget] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [showAuthorizationEvidence, setShowAuthorizationEvidence] = useState(false);
   const [runtimeProcessRunId, setRuntimeProcessRunId] = useState<string | null>(null);
-  const [runtimeProcessAgentId, setRuntimeProcessAgentId] = useState<string | null>(null);
   const [view, setView] = useState<AppView>("personal");
   const [personalSection, setPersonalSection] = useState<PersonalSection>("conversations");
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
@@ -196,16 +194,6 @@ export default function App() {
   const personalGrantAgents = agents.filter(
     (agent) => agent.scope === "personal" && agent.ownerUserId === currentUser?.id,
   );
-  const taskGrantTargets = Object.values(groupTasks).flatMap((tasks) =>
-    tasks
-      .filter((task) => !["completed", "stopped"].includes(task.status))
-      .flatMap((task) => task.participantAgentIds.flatMap((agentId) => {
-        const agent = agents.find(
-          (item) => item.id === agentId && item.scope === "group" && item.groupId === task.groupId,
-        );
-        return agent ? [{ task, agent, value: `${task.id}|${agent.id}` }] : [];
-      })),
-  );
   const selectedResourceGrants = selectedResource
     ? grants.filter((grant) => grant.resourceId === selectedResource.id)
     : [];
@@ -219,8 +207,6 @@ export default function App() {
         (decision) =>
           decision.executingAgentId === selected.id &&
           (decision.action === "resource:read" ||
-            decision.action === "resource:process" ||
-            decision.action === "resource:disclose" ||
             decision.action === "grant:create" ||
             decision.action === "grant:revoke"),
       ).slice(0, 40)
@@ -228,9 +214,6 @@ export default function App() {
   const runtimeProcessRun = runtimeProcessRunId
     ? runs.find((run) => run.id === runtimeProcessRunId) ??
       (activeRun?.id === runtimeProcessRunId ? activeRun : null)
-    : null;
-  const runtimeProcessAgent = runtimeProcessAgentId
-    ? agents.find((agent) => agent.id === runtimeProcessAgentId) ?? null
     : null;
   const runtimeProcessDecisions = runtimeProcessRun
     ? decisions.filter((decision) => decision.runId === runtimeProcessRun.id)
@@ -494,10 +477,12 @@ export default function App() {
           api.decisions().catch(() => null),
         ]);
         if (decisionResult) setDecisions(decisionResult.decisions);
-        setRuns((current) => current.some((run) => run.id === result.run.id)
-          ? current.map((run) => run.id === result.run.id ? result.run : run)
-          : [result.run, ...current]);
-        if (selectedIdRef.current === agentId) setActiveRun(result.run);
+        if (selectedIdRef.current === agentId) {
+          setActiveRun(result.run);
+          setRuns((current) => current.some((run) => run.id === result.run.id)
+            ? current.map((run) => run.id === result.run.id ? result.run : run)
+            : [result.run, ...current]);
+        }
         if (!["queued", "running"].includes(result.run.status)) {
           await Promise.all([
             refreshMessages(agentId),
@@ -536,7 +521,6 @@ export default function App() {
         setActiveRun(result.run);
         setRuns((current) => [result.run, ...current]);
         setRuntimeProcessRunId(result.run.id);
-        setRuntimeProcessAgentId(selected.id);
       }
       setAgents((current) =>
         current.map((agent) =>
@@ -606,7 +590,6 @@ export default function App() {
       setGrants([]);
       setDecisions([]);
       setRuntimeProcessRunId(null);
-      setRuntimeProcessAgentId(null);
       setGroups([]);
       setView("personal");
     } catch (reason) {
@@ -694,7 +677,6 @@ export default function App() {
   const openResource = (resource: ProtectedResource) => {
     setSelectedResourceId(resource.id);
     setGrantAgentId(personalGrantAgents[0]?.id ?? "");
-    setTaskGrantTarget(taskGrantTargets[0]?.value ?? "");
   };
 
   const createResource = async (event: React.FormEvent) => {
@@ -713,7 +695,6 @@ export default function App() {
       setResourceForm(emptyResourceForm);
       setSelectedResourceId(resource.id);
       setGrantAgentId(personalGrantAgents[0]?.id ?? "");
-      setTaskGrantTarget(taskGrantTargets[0]?.value ?? "");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -727,26 +708,6 @@ export default function App() {
     setError(null);
     try {
       await api.grantResource(selectedResource.id, grantAgentId);
-      await refreshSecurity();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const grantSelectedResourceForTask = async () => {
-    if (!selectedResource || !taskGrantTarget) return;
-    const [taskId, agentId] = taskGrantTarget.split("|");
-    if (!taskId || !agentId) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.grantResource(selectedResource.id, agentId, {
-        duration: "task",
-        taskId,
-        action: "process",
-      });
       await refreshSecurity();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -1050,14 +1011,6 @@ export default function App() {
               onRefreshAgents={refreshAgents}
               onSessionsChanged={updateGroupTasks}
               onTaskCreated={(sessionId) => { setCreatingTask(false); setSelectedTaskId(sessionId); }}
-              onRuntimeRunStarted={(run) => {
-                setRuns((current) => current.some((item) => item.id === run.id)
-                  ? current.map((item) => item.id === run.id ? run : item)
-                  : [run, ...current]);
-                setRuntimeProcessAgentId(run.agentId);
-                setRuntimeProcessRunId(run.id);
-                void pollRun(run.id, run.agentId);
-              }}
             />
           </GroupWorkspace>
         ) : view === "human-chat" && selectedHumanConversation ? (
@@ -1098,10 +1051,7 @@ export default function App() {
                 {(activeRun ?? runs[0]) && (
                   <button
                     className="button button-ghost runtime-process-trigger"
-                    onClick={() => {
-                      setRuntimeProcessAgentId(selected.id);
-                      setRuntimeProcessRunId((activeRun ?? runs[0])!.id);
-                    }}
+                    onClick={() => setRuntimeProcessRunId((activeRun ?? runs[0])!.id)}
                   >
                     <i className={activeRun && ["queued", "running"].includes(activeRun.status) ? "is-live" : ""} />
                     后端过程
@@ -1334,10 +1284,10 @@ export default function App() {
         />
       )}
 
-      {runtimeProcessRun && runtimeProcessAgent && currentUser && (
+      {runtimeProcessRun && selected && currentUser && (
         <RuntimeProcessWindow
           key={runtimeProcessRun.id}
-          agent={runtimeProcessAgent}
+          agent={selected}
           currentUser={currentUser}
           run={runtimeProcessRun}
           decisions={runtimeProcessDecisions}
@@ -1461,13 +1411,10 @@ export default function App() {
             <article className="resource-full-content">{selectedResource.content}</article>
             {selectedResource.scope === "private" && selectedResource.ownerUserId === currentUser.id && (
               <section className="grant-manager">
-                <div><span className="eyebrow">Agent 授权</span><h3>按用途授权</h3><p>个人 Agent 可读取；群组 Agent 在指定任务中只能密封处理，不能把原文披露给其他成员。</p></div>
+                <div><span className="eyebrow">Agent 授权</span><h3>允许我的 Agent 读取</h3><p>授权只适用于所选 Agent，不会扩展到其他人或群组。</p></div>
                 {personalGrantAgents.length > 0 ? (
                   <div className="grant-create-row"><select value={grantAgentId} onChange={(event) => setGrantAgentId(event.target.value)}>{personalGrantAgents.map((agent) => <option value={agent.id} key={agent.id}>{agent.name} · {agent.role}</option>)}</select><button className="button button-primary" onClick={() => void grantSelectedResource()} disabled={busy || !grantAgentId}>授权读取</button></div>
                 ) : <p className="grant-empty">先创建一个个人 Agent，才能授予读取权限。</p>}
-                {taskGrantTargets.length > 0 ? (
-                  <div className="grant-create-row"><select value={taskGrantTarget} onChange={(event) => setTaskGrantTarget(event.target.value)}>{taskGrantTargets.map(({ task, agent, value }) => <option value={value} key={value}>{task.title} → {agent.name}</option>)}</select><button className="button button-primary" onClick={() => void grantSelectedResourceForTask()} disabled={busy || !taskGrantTarget}>授权任务内处理</button></div>
-                ) : <p className="grant-empty">创建一个包含群组 Agent 的进行中任务后，可授权其处理资料但不披露原文。</p>}
                 <div className="grant-list">
                   {selectedResourceGrants.map((grant) => {
                     const agent = agents.find((item) => item.id === grant.granteeAgentId);
@@ -1480,7 +1427,7 @@ export default function App() {
                     const active = grant.revokedAt === null &&
                       (!grant.expiresAt || new Date(grant.expiresAt) > new Date()) &&
                       runStillActive;
-                    return <article key={grant.id}><div><strong>{agent?.name ?? "已删除的 Agent"}</strong><small>{grant.action === "process" ? "密封处理" : "读取原文"} · {grant.duration === "persistent" ? "持续授权" : grant.duration === "task" ? "任务授权" : "单次运行授权"} · {active ? "生效中" : "已失效"}</small></div>{active && <button className="button button-danger" onClick={() => void revokeSelectedGrant(grant.id)} disabled={busy}>撤销</button>}</article>;
+                    return <article key={grant.id}><div><strong>{agent?.name ?? "已删除的 Agent"}</strong><small>{grant.duration === "persistent" ? "持续授权" : grant.duration === "task" ? "任务授权" : "单次运行授权"} · {active ? "生效中" : "已失效"}</small></div>{active && <button className="button button-danger" onClick={() => void revokeSelectedGrant(grant.id)} disabled={busy}>撤销</button>}</article>;
                   })}
                   {selectedResourceGrants.length === 0 && <p className="grant-empty">还没有授予任何 Agent。</p>}
                 </div>

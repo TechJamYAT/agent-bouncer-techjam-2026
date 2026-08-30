@@ -16,8 +16,6 @@ function shortId(value: string): string {
 
 function actionLabel(action: string): string {
   if (action === "resource:read") return "读取资源";
-  if (action === "resource:process") return "密封处理";
-  if (action === "resource:disclose") return "披露原文";
   if (action === "grant:create") return "授予权限";
   if (action === "grant:revoke") return "撤销权限";
   return action;
@@ -45,8 +43,7 @@ export function AuthorizationEvidenceWindow({
   const allows = decisions.filter((item) => item.decision === "allow").length;
   const denies = decisions.filter((item) => item.decision === "deny").length;
   const runtimeDecisions = decisions.filter(
-    (item) => ["resource:read", "resource:process", "resource:disclose"].includes(item.action) &&
-      item.runId !== null,
+    (item) => item.action === "resource:read" && item.runId !== null,
   ).length;
 
   const beginDrag = (event: ReactPointerEvent<HTMLElement>) => {
@@ -119,7 +116,7 @@ export function AuthorizationEvidenceWindow({
           const run = decision.runId
             ? runs.find((item) => item.id === decision.runId) ?? null
             : null;
-          const origin = ["resource:read", "resource:process", "resource:disclose"].includes(decision.action)
+          const origin = decision.action === "resource:read"
             ? decision.runId ? "Runtime 工具" : "控制面测试"
             : decision.taskId ? "任务授权流程" : "控制面授权流程";
           const credentialActive = run?.status === "queued" || run?.status === "running";

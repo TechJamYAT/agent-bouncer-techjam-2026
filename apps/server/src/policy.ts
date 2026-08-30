@@ -34,16 +34,13 @@ const deny = (reasonCode: string, detail: string): PolicyResult => ({
   detail,
 });
 
-function activeGrant(
-  input: ResourceReadPolicyInput,
-  allowedActions: ResourceGrant["action"][],
-): ResourceGrant | null {
+function hasActiveGrant(input: ResourceReadPolicyInput): boolean {
   const now = input.now ?? new Date();
-  return input.grants.find((grant) => {
+  return input.grants.some((grant) => {
     if (
       grant.resourceId !== input.resource.id ||
       grant.granteeAgentId !== input.agent.id ||
-      !allowedActions.includes(grant.action) ||
+      grant.action !== "read" ||
       grant.revokedAt !== null
     ) {
       return false;
@@ -54,7 +51,7 @@ function activeGrant(
       return grant.taskId !== null && grant.taskId === input.taskId;
     }
     return true;
-  }) ?? null;
+  });
 }
 
 function isMember(memberships: GroupMembership[], groupId: string, userId: string): boolean {
@@ -63,10 +60,7 @@ function isMember(memberships: GroupMembership[], groupId: string, userId: strin
   );
 }
 
-function evaluateResourceAccess(
-  input: ResourceReadPolicyInput,
-  mode: "read" | "process",
-): PolicyResult {
+export function evaluateResourceRead(input: ResourceReadPolicyInput): PolicyResult {
   const { agent, humanId, memberships, resource } = input;
 
   if (agent.status === "stopped" || agent.status === "error") {
@@ -92,7 +86,7 @@ function evaluateResourceAccess(
         "A personal Agent can never read another human's private resource.",
       );
     }
-    return activeGrant(input, mode === "process" ? ["read", "process"] : ["read"])
+    return hasActiveGrant(input)
       ? allow("EXPLICIT_PRIVATE_GRANT", "The owner granted this Agent read access.")
       : deny("PRIVATE_GRANT_REQUIRED", "The private resource owner has not granted access.");
   }
@@ -134,37 +128,7 @@ function evaluateResourceAccess(
       "A group Agent cannot read a non-member's private resource.",
     );
   }
-  const grant = activeGrant(input, mode === "process" ? ["read", "process"] : ["read"]);
-  return grant
-    ? allow(
-        grant.action === "process" ? "TASK_SCOPED_PROCESS_GRANT" : "TASK_SCOPED_GRANT",
-        grant.action === "process"
-          ? "The owner granted this group Agent sealed processing access for the task."
-          : "The owner granted this group Agent temporary read access.",
-      )
+  return hasActiveGrant(input)
+    ? allow("TASK_SCOPED_GRANT", "The owner granted this group Agent temporary access.")
     : deny("PRIVATE_GRANT_REQUIRED", "The private resource owner has not granted access.");
-}
-
-export function evaluateResourceRead(input: ResourceReadPolicyInput): PolicyResult {
-  return evaluateResourceAccess(input, "read");
-}
-
-export function evaluateResourceProcess(input: ResourceReadPolicyInput): PolicyResult {
-  return evaluateResourceAccess(input, "process");
-}
-
-export function evaluateResourceDisclosure(input: ResourceReadPolicyInput): PolicyResult {
-  if (input.resource.scope === "private" && input.resource.ownerUserId !== input.humanId) {
-    return deny(
-      "PRIVATE_DISCLOSURE_RECIPIENT_DENIED",
-      "Processing permission does not authorize disclosure to the initiating human.",
-    );
-  }
-  const read = evaluateResourceRead(input);
-  return read.decision === "deny"
-    ? read
-    : allow(
-        "DISCLOSURE_RECIPIENT_APPROVED",
-        "The initiating human is permitted to receive the protected resource contents.",
-      );
 }

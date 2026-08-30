@@ -53,7 +53,6 @@ const createResourceBody = z.object({
 });
 const createGrantBody = z.object({
   agentId: z.string().uuid(),
-  action: z.enum(["read", "process"]).optional(),
   duration: z.enum(["persistent", "run", "task"]),
   runId: z.string().uuid().optional(),
   taskId: z.string().uuid().optional(),
@@ -63,13 +62,6 @@ const resourceReadBody = z.object({}).strict();
 const runtimeResourceReferenceBody = z.object({
   ownerUsername: z.string().trim().min(1).max(80),
   title: z.string().trim().min(1).max(200),
-}).strict();
-const runtimeResourceProcessBody = runtimeResourceReferenceBody.extend({
-  operation: z.literal("launch-risk-check"),
-}).strict();
-const runtimeResourceDisclosureBody = z.object({
-  ownerUsername: z.string().trim().min(1).max(80),
-  title: z.string().trim().min(1).max(200).optional(),
 }).strict();
 const artifactPublicationBody = z.object({
   sourceRelativePath: z.string().trim().min(1).max(1024),
@@ -615,21 +607,6 @@ export async function createApp(
   app.post("/api/runtime/resources/read", async (request) => {
     const reference = runtimeResourceReferenceBody.parse(request.body);
     return service.readResourceForRuntimeByReference(runtimeToken(request), reference);
-  });
-
-  app.post("/api/runtime/resources/process", async (request) => {
-    const reference = runtimeResourceProcessBody.parse(request.body);
-    return service.processResourceForRuntimeByReference(runtimeToken(request), reference);
-  });
-
-  app.post("/api/runtime/resources/disclose", async (request) => {
-    const reference = runtimeResourceDisclosureBody.parse(request.body);
-    return reference.title
-      ? service.discloseResourceForRuntimeByReference(runtimeToken(request), {
-          ownerUsername: reference.ownerUsername,
-          title: reference.title,
-        })
-      : service.requestOwnerDisclosureForRuntime(runtimeToken(request), reference);
   });
 
   app.get("/api/runtime/workspace/shared", async (request) => ({

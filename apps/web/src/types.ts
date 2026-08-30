@@ -113,7 +113,7 @@ export interface ResourceGrant {
   resourceId: string;
   granteeAgentId: string;
   grantedByUserId: string;
-  action: "read" | "process";
+  action: "read";
   duration: "persistent" | "run" | "task";
   runId: string | null;
   taskId: string | null;
@@ -181,15 +181,6 @@ export interface AuthorizationDecision {
   executingAgentName: string | null;
   targetLabel: string;
   targetOwnerName: string | null;
-  requestEvidence?: {
-    source: "agent_runtime" | "control_plane";
-    method: "GET" | "POST" | "PATCH" | "DELETE";
-    path: string;
-    command: string | null;
-    body: Record<string, string> | null;
-    responseStatus: number;
-    redacted: true;
-  };
 }
 
 export type CoordinationMode = "manual" | "automatic";

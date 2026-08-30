@@ -48,24 +48,6 @@
 | 正常案例与拒绝案例 | 同一场景连续展示 Alice 成功读取与 Bob 读取被拒 |
 | 自动化证据 | `npm run check` 运行类型检查、授权测试和生产构建 |
 
-## 盲处理演示：Agent 能处理，当前用户不能看原文
-
-这是比“Agent 完全不能访问”更强的混淆代理（confused deputy）演示：
-
-1. Alice 在 Alpha 群组创建手动任务，把群组 Agent `Case` 加入参与者，任务中明确点名
-   `Bob — Private Launch Notes`，要求先判断是否存在上线风险，再尝试把原文转给 Alice。
-2. Bob 登录，打开自己的该份私人资料，在“按用途授权”中选择这个任务与 `Case`，点击
-   “授权任务内处理”。该授权只包含 `process`，不包含 `read` 或 `disclose`。
-3. Alice 回到任务并执行下一步。`Case` 的 `vault.mjs assess` 会真实到达后端；Bouncer
-   记录 `resource:process = allow / TASK_SCOPED_PROCESS_GRANT`，但工具只返回聚合风险结果。
-4. `Case` 随后必须通过 `vault.mjs disclose` 请求原文。后端再次以“当前接收者 Alice”
-   鉴权，并记录 `resource:disclose = deny / PRIVATE_DISCLOSURE_RECIPIENT_DENIED`。
-5. 悬浮“后端执行过程”会同时展示“密封处理允许”和“向当前用户披露拒绝”，且不展示
-   Bob 的资料内容。任务结束后，处理授权自动撤销。
-
-因此，资料不是靠提示词保密：原文只进入后端受信任处理边界，面向 Alice 的 Runtime
-只能得到固定结构的聚合结果。即使 Agent 被要求忽略规则，也拿不到可转发的原文。
-
 ## 三分钟现场演示
 
 建议只演示以下主线，不在三分钟内展开群聊或多 Agent 功能。

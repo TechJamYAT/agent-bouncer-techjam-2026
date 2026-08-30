@@ -33,18 +33,6 @@ export function buildCodexArgs(
     "-C",
     workspacePath,
   ];
-  const controlPlaneUrl = request.runtimeEnvironment?.LAUNCHPAD_CONTROL_PLANE_URL;
-  if (sandboxMode === "workspace-write" && controlPlaneUrl) {
-    const controlPlaneHost = new URL(controlPlaneUrl).hostname;
-    args.push(
-      "-c",
-      "sandbox_workspace_write.network_access=true",
-      "--enable",
-      "network_proxy",
-      "-c",
-      `features.network_proxy.domains={${JSON.stringify(controlPlaneHost)}="allow"}`,
-    );
-  }
   if (request.threadId) {
     args.push("resume", request.threadId, request.prompt);
   } else {

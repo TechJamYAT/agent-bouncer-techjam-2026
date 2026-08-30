@@ -37,24 +37,6 @@ describe("Codex runner protocol", () => {
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "add tests"]);
   });
 
-  it("allows only the authenticated control-plane host for Runtime tools", () => {
-    const args = buildCodexArgs(
-      {
-        agentId: "agent",
-        workspacePath: "/tmp/workspace",
-        prompt: "read the protected source",
-        threadId: null,
-        runtimeEnvironment: {
-          LAUNCHPAD_CONTROL_PLANE_URL: "http://127.0.0.1:3000",
-        },
-      },
-      "workspace-write",
-    );
-    expect(args).toContain("sandbox_workspace_write.network_access=true");
-    expect(args).toContain("network_proxy");
-    expect(args).toContain('features.network_proxy.domains={"127.0.0.1"="allow"}');
-  });
-
   it("extracts the session, final message and usage", () => {
     const parsed = {
       messages: [] as string[],

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEMO_GROUP_IDS, DEMO_RESOURCE_IDS, DEMO_USER_IDS } from "./demo-data.js";
-import {
-  evaluateResourceDisclosure,
-  evaluateResourceProcess,
-  evaluateResourceRead,
-} from "./policy.js";
+import { evaluateResourceRead } from "./policy.js";
 import type {
   Agent,
   GroupMembership,
@@ -261,48 +257,5 @@ describe("Bouncer resource policy", () => {
         taskId: "task-2",
       }),
     ).toMatchObject({ decision: "deny", reasonCode: "PRIVATE_GRANT_REQUIRED" });
-  });
-
-  it("separates cross-user task processing from disclosure to the initiator", () => {
-    const alphaAgent: Agent = {
-      ...baseAgent,
-      id: "alpha-privacy-agent",
-      scope: "group",
-      ownerUserId: null,
-      groupId: DEMO_GROUP_IDS.alpha,
-    };
-    const bobPrivate: ProtectedResource = {
-      ...alicePrivate,
-      id: DEMO_RESOURCE_IDS.bobPrivate,
-      ownerUserId: DEMO_USER_IDS.bob,
-    };
-    const processGrant = grant({
-      resourceId: bobPrivate.id,
-      granteeAgentId: alphaAgent.id,
-      grantedByUserId: DEMO_USER_IDS.bob,
-      action: "process",
-      duration: "task",
-      taskId: "task-1",
-    });
-    const input = {
-      humanId: DEMO_USER_IDS.alice,
-      agent: alphaAgent,
-      resource: bobPrivate,
-      memberships,
-      grants: [processGrant],
-      taskId: "task-1",
-    };
-    expect(evaluateResourceProcess(input)).toMatchObject({
-      decision: "allow",
-      reasonCode: "TASK_SCOPED_PROCESS_GRANT",
-    });
-    expect(evaluateResourceRead(input)).toMatchObject({
-      decision: "deny",
-      reasonCode: "PRIVATE_GRANT_REQUIRED",
-    });
-    expect(evaluateResourceDisclosure(input)).toMatchObject({
-      decision: "deny",
-      reasonCode: "PRIVATE_DISCLOSURE_RECIPIENT_DENIED",
-    });
   });
 });

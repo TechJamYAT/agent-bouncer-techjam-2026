@@ -1,14 +1,11 @@
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Project, Workspace } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 
 const temporaryDirectories: string[] = [];
-const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(
@@ -55,52 +52,8 @@ describe("WorkspaceManager", () => {
     );
     const toolPath = path.join(projectPath, ".launchpad", "tools", "vault.mjs");
     expect((await stat(toolPath)).mode & 0o777).toBe(0o500);
-    const vaultTool = await readFile(toolPath, "utf8");
-    expect(vaultTool).toContain("--owner");
-    expect(vaultTool).toContain("'/process'");
-    expect(vaultTool).toContain("'/disclose'");
-    expect(vaultTool).toContain("title || command === 'disclose'");
-    expect(vaultTool).toContain("...(title ? { title } : {})");
-    expect(vaultTool).toContain("spawnSync('curl'");
-    expect(vaultTool).not.toContain("await fetch");
-
-    const fakeBin = path.join(root, "fake-bin");
-    const curlCapture = path.join(root, "curl-request.json");
-    await mkdir(fakeBin, { recursive: true });
-    await writeFile(
-      path.join(fakeBin, "curl"),
-      [
-        "#!/usr/bin/env node",
-        "import { writeFileSync } from 'node:fs';",
-        "writeFileSync(process.env.VAULT_TEST_CAPTURE, JSON.stringify(process.argv.slice(2)));",
-        "process.stdout.write(JSON.stringify({ error: 'Access Denied: RESOURCE_DISCLOSURE_DENIED' }) + '\\n403');",
-        "",
-      ].join("\n"),
-      { encoding: "utf8", mode: 0o700 },
-    );
-    await expect(execFileAsync(
-      process.execPath,
-      [toolPath, "disclose", "--owner", "alice"],
-      {
-        cwd: projectPath,
-        env: {
-          ...process.env,
-          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-          LAUNCHPAD_CONTROL_PLANE_URL: "http://control-plane.example",
-          LAUNCHPAD_RUNTIME_TOKEN: "test-run-token",
-          VAULT_TEST_CAPTURE: curlCapture,
-        },
-      },
-    )).rejects.toMatchObject({ code: 3 });
-    const curlArguments = JSON.parse(await readFile(curlCapture, "utf8")) as string[];
-    expect(curlArguments).toEqual(expect.arrayContaining([
-      "--request",
-      "POST",
-      "Authorization: Bearer test-run-token",
-      "--data-binary",
-      JSON.stringify({ ownerUsername: "alice" }),
-      "http://control-plane.example/api/runtime/resources/disclose",
-    ]));
+    expect(await readFile(toolPath, "utf8")).toContain("--owner");
+    expect(await readFile(toolPath, "utf8")).toContain("url += '/read'");
     expect(await readFile(path.join(projectPath, "AGENTS.md"), "utf8"))
       .toContain("not to an Agent");
     expect(await readFile(path.join(manager.workspacePath(workspace), ".launchpad", "WORKSPACE.md"), "utf8"))

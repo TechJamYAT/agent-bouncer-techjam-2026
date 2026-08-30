@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type {
   Agent,
-  AgentRun,
   ArtifactPublication,
   ContextImportMode,
   CoordinationMode,
@@ -24,7 +23,6 @@ interface CoordinationWorkspaceProps {
   onRefreshAgents: () => Promise<void>;
   onSessionsChanged?: (groupId: string, sessions: CoordinationSnapshot["session"][]) => void;
   onTaskCreated?: (sessionId: string) => void;
-  onRuntimeRunStarted?: (run: AgentRun) => void;
 }
 
 type LiveAgentActivity =
@@ -124,7 +122,6 @@ export function CoordinationWorkspace({
   onRefreshAgents,
   onSessionsChanged,
   onTaskCreated,
-  onRuntimeRunStarted,
 }: CoordinationWorkspaceProps) {
   const [groupId, setGroupId] = useState(fixedGroupId ?? groups[0]?.id ?? "");
   const [, setSessions] = useState<Array<CoordinationSnapshot["session"]>>([]);
@@ -145,7 +142,6 @@ export function CoordinationWorkspace({
   const [coordinatorEnabled, setCoordinatorEnabled] = useState(true);
   const [maxCallsPerRound, setMaxCallsPerRound] = useState(4);
   const roundPermissionRef = useRef<HTMLElement>(null);
-  const reportedRuntimeRunIds = useRef(new Set<string>());
   const [participantAgentIds, setParticipantAgentIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -153,12 +149,6 @@ export function CoordinationWorkspace({
   const [resolvingManualPermission, setResolvingManualPermission] = useState(false);
   const [resolvingRoundPermission, setResolvingRoundPermission] = useState(false);
   const [showTaskCreate, setShowTaskCreate] = useState(false);
-
-  const reportRuntimeRun = useCallback((run: AgentRun) => {
-    if (reportedRuntimeRunIds.current.has(run.id)) return;
-    reportedRuntimeRunIds.current.add(run.id);
-    onRuntimeRunStarted?.(run);
-  }, [onRuntimeRunStarted]);
 
   const groupAgents = useMemo(
     () => agents.filter(
@@ -245,16 +235,6 @@ export function CoordinationWorkspace({
       onError(reason instanceof Error ? reason.message : String(reason)),
     );
   }, [onError, refreshProjectFiles, snapshot?.session.id, snapshot?.session.projectId]);
-
-  useEffect(() => {
-    const runId = snapshot?.steps.find(
-      (step) => step.id === snapshot.session.activeStepId && step.runId,
-    )?.runId;
-    if (!runId || reportedRuntimeRunIds.current.has(runId)) return;
-    void api.run(runId)
-      .then(({ run }) => reportRuntimeRun(run))
-      .catch(() => reportedRuntimeRunIds.current.delete(runId));
-  }, [reportRuntimeRun, snapshot]);
 
   useEffect(() => {
     if (!snapshot || !selectedProjectFile) {
@@ -421,7 +401,6 @@ export function CoordinationWorkspace({
         snapshot.session.id,
         snapshot.session.version,
       );
-      if (result.run) reportRuntimeRun(result.run);
       setSnapshot(result.snapshot);
       await onRefreshAgents();
     } catch (reason) {
@@ -619,7 +598,6 @@ export function CoordinationWorkspace({
         decision,
         snapshot.session.version,
       );
-      if (result.run) reportRuntimeRun(result.run);
       setSnapshot(result.snapshot);
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : String(reason));

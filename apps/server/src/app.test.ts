@@ -187,11 +187,7 @@ describe("HTTP boundary", () => {
       method: "POST",
       url: "/api/agents",
       headers: { cookie },
-      payload: {
-        name: "Runtime HTTP Reader",
-        scope: "group",
-        groupId: DEMO_GROUP_IDS.alpha,
-      },
+      payload: { name: "Runtime HTTP Reader", scope: "personal" },
     });
     const agentId = created.json().agent.id as string;
     const started = await app.inject({
@@ -223,7 +219,7 @@ describe("HTTP boundary", () => {
     expect(allowed.json().decision).toMatchObject({
       runId,
       decision: "allow",
-      reasonCode: "TASK_SCOPED_GRANT",
+      reasonCode: "EXPLICIT_PRIVATE_GRANT",
     });
 
     const deniedExact = await app.inject({
@@ -253,32 +249,7 @@ describe("HTTP boundary", () => {
           runId,
           targetId: DEMO_RESOURCE_IDS.bobPrivate,
           decision: "deny",
-          reasonCode: "PRIVATE_GRANT_REQUIRED",
-        }),
-      ]),
-    );
-
-    const deniedOwnerDisclosure = await app.inject({
-      method: "POST",
-      url: "/api/runtime/resources/disclose",
-      headers: { authorization: `Bearer ${capturedRuntimeToken}` },
-      payload: { ownerUsername: "bob" },
-    });
-    expect(deniedOwnerDisclosure.statusCode).toBe(403);
-    expect(deniedOwnerDisclosure.json()).toMatchObject({
-      error: "Access Denied: RESOURCE_DISCLOSURE_DENIED",
-    });
-    expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          runId,
-          action: "resource:disclose",
-          decision: "deny",
-          requestEvidence: expect.objectContaining({
-            path: "/api/runtime/resources/disclose",
-            body: { ownerUsername: "bob" },
-            responseStatus: 403,
-          }),
+          reasonCode: "PERSONAL_AGENT_OWNER_MISMATCH",
         }),
       ]),
     );
