@@ -208,7 +208,9 @@ launchpad-demo
 npm run check
 ```
 
-它依次执行 TypeScript 类型检查、服务端自动化测试和前后端生产构建。核心测试覆盖：
+它会先检查 Git 跟踪文件中是否混入环境文件、运行数据库、构建产物、疑似密钥或异常
+大文件，并确认 `origin` 指向团队仓库；随后执行 TypeScript 类型检查、服务端自动化测试
+和前后端生产构建。核心测试覆盖：
 
 - Alice 的 Agent 在有效授权下读取 Alice 私人资料；
 - 未授权时拒绝读取；
@@ -219,6 +221,18 @@ npm run check
 - 单次 Run 授权在运行结束后自动撤销；
 - 群 Agent 的同群允许、跨群拒绝与任务授权失效；
 - 授权决定字段完整且敏感详情经过脱敏。
+
+提交或推送前再确认：
+
+```bash
+git status --short
+git remote -v
+npm run check
+```
+
+`.env`、本地数据、Agent 工作区、Codex 会话、构建目录和 Terraform state 均不得提交。
+本团队的提交目标是 `TechJamYAT/agent-bouncer-techjam-2026`；
+`RrankPyramid/CodeJam` 仅作为 Starter Kit 上游参考。
 
 ## Bouncer 执行链
 

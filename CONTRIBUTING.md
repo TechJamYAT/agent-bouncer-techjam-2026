@@ -26,7 +26,7 @@ docker compose config
 
 - Explain the behavior and reason for the change.
 - Add tests for API, lifecycle, persistence, or Runtime changes.
-- Update English documentation and `.env.example` when configuration changes.
+- Update the relevant documentation and `.env.example` when configuration changes.
 - Use GitHub Flavored Markdown and relative repository links.
 - Never commit credentials, local state, workspaces, build output, or Terraform
   state.
