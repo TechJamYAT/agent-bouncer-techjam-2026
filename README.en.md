@@ -104,7 +104,8 @@ npm audit --audit-level=low
 ```
 
 `npm run check` performs TypeScript checks, server tests, and production builds
-for both the web app and server. Create a secret-scanned source archive with:
+for both the web app and server. Create a clean source archive that excludes
+local credentials, state, dependencies, and build output with:
 
 ```bash
 npm run package:submission -- ../agent-bouncer-submission.zip
