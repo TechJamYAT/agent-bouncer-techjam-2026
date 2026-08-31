@@ -8,38 +8,80 @@ authorization sources.
 
 ```mermaid
 flowchart LR
-    subgraph Client["Untrusted client boundary"]
-        Human["Human"] --> UI["React Web UI"]
-        Evidence["Run-linked permission evidence"]
+    subgraph CLIENT["Untrusted browser boundary"]
+        HUMAN["Human user"] --> UI["React Web UI"]
+        EVIDENCE["Permission evidence<br/>Run status · decisions · reason codes"] --> UI
     end
 
-    subgraph Control["Trusted control-plane boundary"]
-        API["Fastify API"] --> Session["Session authentication"]
-        Session -->|"human principal"| Service["AgentService / Run orchestration"]
-        API --> Credential["Runtime credential validation"]
-        Credential -->|"Agent + human + Run context"| Service
-        Service -->|"human + Agent + Run + scoped grant"| Policy["Bouncer policy enforcement point"]
-        Policy --> Vault["Protected resource service"]
-        Policy --> Audit["Authorization decision store"]
-        Store[("JSON state\nusers · Agents · grants · intent · Runs")]
-        Service <--> Store
-        Policy <--> Store
+    subgraph CONTROL["Trusted Fastify control plane · Bouncer enforcement boundary"]
+        API["Fastify API<br/>Human session + Runtime endpoints"]
+        PRINCIPAL["PrincipalService<br/>Sessions · groups · Agent lifecycle"]
+        SERVICE["AgentService<br/>Run orchestration facade"]
+        WORKFLOW["ProtectedResourceWorkflowService<br/>Approval · timeout · resume · final evidence"]
+        CREDENTIAL["RuntimeCredentialService<br/>Short-lived Run-bound credentials"]
+        BUILDERS["Prompt + Context Builders<br/>Authenticated identity · bounded snapshots"]
+        CONFIG["ModelRuntimeConfiguration<br/>Environment or in-memory setup"]
+        GATEWAY["Protected resource gateway<br/>Catalog · Read · Process · Disclose · Forward"]
+        POLICY["Bouncer policy engine<br/>Server-side authorization"]
+        STORE[("JSON metadata store<br/>Users · Agents · Runs · Grants<br/>Approvals · Decisions · Messages")]
+        DELIVERY["Trusted forward delivery<br/>Human direct message"]
     end
 
-    subgraph Runtime["Untrusted disposable Agent Runtime"]
-        Runner["Codex CLI Runtime"] --> Tool["vault.mjs protected tool"]
-        Runner --> Workspace["Current conversation/project workspace"]
+    subgraph RUNTIME["Untrusted Agent Runtime"]
+        RUNNER{"AgentRunner interface"}
+        LOCAL["Local POC<br/>Disposable Docker / Colima / Podman"]
+        ECS["Deployment profile<br/>Codex CLI in application container"]
+        WORKSPACE["Conversation / project workspace<br/>.launchpad/context.json · group.json · tools/vault.mjs"]
+        RUNNER --> LOCAL
+        RUNNER --> ECS
+        LOCAL <--> WORKSPACE
+        ECS <--> WORKSPACE
     end
 
-    UI -->|"HttpOnly session + intent"| API
-    Service -->|"short-lived Run-bound credential"| Runner
-    Tool -->|"credential + owner/title/recipient"| API
-    Policy -->|"allow: content"| Tool
-    Policy -->|"deny: safe generic error"| Tool
-    Policy -->|"allow forward: control-plane delivery"| Delivery["Human direct message"]
-    Audit --> API --> Evidence
-    Runner --> Model["Ark / compatible model"]
+    MODEL["External OpenAI-compatible<br/>Responses API<br/>NUS · Ark · Custom"]
+
+    UI -->|"HttpOnly session + human intent"| API
+    API --> SERVICE
+    SERVICE --> PRINCIPAL
+    PRINCIPAL <--> STORE
+    SERVICE <--> STORE
+    SERVICE --> WORKFLOW
+    WORKFLOW <--> STORE
+    SERVICE --> BUILDERS
+    BUILDERS -->|"Generate bounded Runtime files"| WORKSPACE
+    SERVICE -->|"Invoke Agent turn"| RUNNER
+    SERVICE -->|"Issue · validate · revoke"| CREDENTIAL
+    CREDENTIAL -->|"Run-bound credential"| RUNNER
+    SERVICE --> CONFIG
+    CONFIG -->|"Validated model settings"| RUNNER
+
+    LOCAL --> MODEL
+    ECS --> MODEL
+    WORKSPACE -->|"vault.mjs request + Run credential"| API
+    SERVICE -->|"Authenticated protected operation"| GATEWAY
+    GATEWAY --> POLICY
+    POLICY <--> STORE
+    POLICY -->|"ALLOW or safe DENY"| GATEWAY
+    GATEWAY -.->|"Response via API"| WORKSPACE
+    GATEWAY -->|"Approved recipient-bound forward"| DELIVERY
+    DELIVERY --> STORE
+    STORE -.->|"Run status + audited evidence"| API
+    API -.-> EVIDENCE
+
+    classDef trusted fill:#eef1f8,stroke:#1f232b,stroke-width:2px,color:#252a34;
+    classDef decision fill:#fff0c9,stroke:#80652b,stroke-width:2px,color:#3c3424;
+    classDef protected fill:#e9f5ed,stroke:#2f7550,stroke-width:2px,color:#204b35;
+    classDef external fill:#f2edf9,stroke:#604d7c,stroke-width:2px,color:#3e3153;
+    class API,PRINCIPAL,SERVICE,WORKFLOW,CREDENTIAL,BUILDERS,CONFIG,STORE trusted;
+    class RUNNER,POLICY decision;
+    class GATEWAY,DELIVERY protected;
+    class MODEL external;
 ```
+
+This diagram is the submission-level architecture and trusted execution flow.
+Bouncer is the enforcement path inside the trusted control plane, not a separate
+deployable service. Solid arrows show calls or data movement; dotted arrows show
+the protected response and evidence projection back across a trust boundary.
 
 The two enforcement outcomes use the same path. An allowed read returns content
 only after the server validates the current human, Agent ownership, Run-bound
@@ -52,7 +94,9 @@ error at the Runtime boundary.
 ### Web UI
 
 Lists Agents, manages lifecycle actions, submits prompts, and polls asynchronous
-Runs. It never receives the Ark API key.
+Runs. Its setup form transmits a visitor-supplied API key once to the same-origin
+server and clears the field; the server never returns the key to the browser or
+writes it to application data.
 
 ### Fastify API
 
@@ -235,10 +279,10 @@ the stored Codex thread, and escalate termination after a grace period.
 | Contract | Trusted owner | Failure behavior |
 | --- | --- | --- |
 | Human session | Fastify API and server session store | `401`; request body cannot replace identity |
-| Agent/Run credential | AgentService and in-memory token hash map | `401`; token expires and is deleted after the Run |
+| Agent/Run credential | RuntimeCredentialService and in-memory token hash map | `401`; token expires and is deleted after the Run |
 | Protected read decision | Bouncer resource policy | no content; safe Runtime error; specific audited reason |
 | Authorization evidence | append-only decision records | correlated by human, Agent, Run/task, action, target, and policy version |
-| Middleware evidence contract | AgentService Run finalization | missing decisions fail the Run/step and expose Retry instead of a false completed state |
+| Middleware evidence contract | ProtectedResourceWorkflowService plus AgentService Run finalization | missing decisions fail the Run/step and expose Retry instead of a false completed state |
 
 The current container or ECS instance is the POC trust boundary. Ordinary
 containers are not hardened multi-tenant isolation.

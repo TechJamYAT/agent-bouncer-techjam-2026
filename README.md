@@ -243,25 +243,88 @@ npm run check
 - 群 Agent 的同群允许、跨群拒绝与任务授权失效；
 - 授权决定字段完整且敏感详情经过脱敏。
 
-## Bouncer 执行链
+## 架构与可信执行流
+
+下图同时概括组件关系、部署分支和一次受保护操作的真实调用链，可直接作为本项目的
+**架构流程图**。Bouncer 不是单独部署的服务，而是 Fastify 可信控制面内由 Runtime
+凭证、审批状态机、资源网关、服务端策略和审计证据共同形成的强制边界。
 
 ```mermaid
 flowchart LR
-    Human["Human session"] --> UI["React Web UI"]
-    UI --> API["Fastify API"]
-    API --> Service["AgentService"]
-    Service --> Policy["Bouncer policy engine"]
-    Service --> Runner["Agent Runtime"]
-    Runner -->|"short-lived scoped credential"| Vault["Protected resource service"]
-    Vault --> Policy
-    Policy -->|"allow: return content"| Runner
-    Policy -->|"deny: return safe error"| Runner
-    Policy --> Decisions["Authorization decisions"]
-    Decisions --> Evidence["Draggable evidence window"]
+    subgraph CLIENT["Untrusted browser boundary"]
+        HUMAN["Human user"] --> UI["React Web UI"]
+        EVIDENCE["Permission evidence<br/>Run status · decisions · reason codes"] --> UI
+    end
+
+    subgraph CONTROL["Trusted Fastify control plane · Bouncer enforcement boundary"]
+        API["Fastify API<br/>Human session + Runtime endpoints"]
+        PRINCIPAL["PrincipalService<br/>Sessions · groups · Agent lifecycle"]
+        SERVICE["AgentService<br/>Run orchestration facade"]
+        WORKFLOW["ProtectedResourceWorkflowService<br/>Approval · timeout · resume · final evidence"]
+        CREDENTIAL["RuntimeCredentialService<br/>Short-lived Run-bound credentials"]
+        BUILDERS["Prompt + Context Builders<br/>Authenticated identity · bounded snapshots"]
+        CONFIG["ModelRuntimeConfiguration<br/>Environment or in-memory setup"]
+        GATEWAY["Protected resource gateway<br/>Catalog · Read · Process · Disclose · Forward"]
+        POLICY["Bouncer policy engine<br/>Server-side authorization"]
+        STORE[("JSON metadata store<br/>Users · Agents · Runs · Grants<br/>Approvals · Decisions · Messages")]
+        DELIVERY["Trusted forward delivery<br/>Human direct message"]
+    end
+
+    subgraph RUNTIME["Untrusted Agent Runtime"]
+        RUNNER{"AgentRunner interface"}
+        LOCAL["Local POC<br/>Disposable Docker / Colima / Podman"]
+        ECS["Deployment profile<br/>Codex CLI in application container"]
+        WORKSPACE["Conversation / project workspace<br/>.launchpad/context.json · group.json · tools/vault.mjs"]
+        RUNNER --> LOCAL
+        RUNNER --> ECS
+        LOCAL <--> WORKSPACE
+        ECS <--> WORKSPACE
+    end
+
+    MODEL["External OpenAI-compatible<br/>Responses API<br/>NUS · Ark · Custom"]
+
+    UI -->|"HttpOnly session + human intent"| API
+    API --> SERVICE
+    SERVICE --> PRINCIPAL
+    PRINCIPAL <--> STORE
+    SERVICE <--> STORE
+    SERVICE --> WORKFLOW
+    WORKFLOW <--> STORE
+    SERVICE --> BUILDERS
+    BUILDERS -->|"Generate bounded Runtime files"| WORKSPACE
+    SERVICE -->|"Invoke Agent turn"| RUNNER
+    SERVICE -->|"Issue · validate · revoke"| CREDENTIAL
+    CREDENTIAL -->|"Run-bound credential"| RUNNER
+    SERVICE --> CONFIG
+    CONFIG -->|"Validated model settings"| RUNNER
+
+    LOCAL --> MODEL
+    ECS --> MODEL
+    WORKSPACE -->|"vault.mjs request + Run credential"| API
+    SERVICE -->|"Authenticated protected operation"| GATEWAY
+    GATEWAY --> POLICY
+    POLICY <--> STORE
+    POLICY -->|"ALLOW or safe DENY"| GATEWAY
+    GATEWAY -.->|"Response via API"| WORKSPACE
+    GATEWAY -->|"Approved recipient-bound forward"| DELIVERY
+    DELIVERY --> STORE
+    STORE -.->|"Run status + audited evidence"| API
+    API -.-> EVIDENCE
+
+    classDef trusted fill:#eef1f8,stroke:#1f232b,stroke-width:2px,color:#252a34;
+    classDef decision fill:#fff0c9,stroke:#80652b,stroke-width:2px,color:#3c3424;
+    classDef protected fill:#e9f5ed,stroke:#2f7550,stroke-width:2px,color:#204b35;
+    classDef external fill:#f2edf9,stroke:#604d7c,stroke-width:2px,color:#3e3153;
+    class API,PRINCIPAL,SERVICE,WORKFLOW,CREDENTIAL,BUILDERS,CONFIG,STORE trusted;
+    class RUNNER,POLICY decision;
+    class GATEWAY,DELIVERY protected;
+    class MODEL external;
 ```
 
-关键边界：模型、提示词和浏览器都不是授权来源。只有服务端状态、当前会话、Agent
-归属、资源归属和有效 grant 共同决定访问结果。
+关键边界：模型、提示词、浏览器和 Runtime 工作区都不是授权来源；`context.json`、
+`group.json` 与 `vault.mjs` 也不能自行授予权限。只有服务端会话、主体归属、当前 Run、
+资源所有权、有效 grant 和策略状态共同决定结果。`forward` 的正文由可信控制面直接投递，
+不会先返回模型。
 
 完整的一页架构与信任边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，策略和
 原因码见 [docs/TRACK_B_DESIGN.md](docs/TRACK_B_DESIGN.md)。
@@ -269,12 +332,18 @@ flowchart LR
 ## 项目结构
 
 ```text
-apps/web/                 React UI 与权限证据窗口
-apps/server/              Fastify API、Run 编排、主体服务、提示词构建、策略与测试
-apps/server/src/policy.ts Bouncer 资源读取策略
-scripts/                  本地 POC、部署与初始化脚本
-docs/                     架构、赛道设计、运行和部署说明
-Dockerfile.runtime        一次性本地 Agent Runtime
+apps/web/                                      React UI、模型配置与权限证据窗口
+apps/server/src/app.ts                         Human / Runtime HTTP 边界
+apps/server/src/agent-service.ts               Run 编排兼容门面
+apps/server/src/principal-service.ts           会话、群组与 Agent 生命周期
+apps/server/src/protected-resource-workflow.ts 审批、超时、恢复与最终证据状态机
+apps/server/src/runtime-credential-service.ts  短期 Run 凭证生命周期
+apps/server/src/agent-prompt-builder.ts         基于可信身份构建模型提示
+apps/server/src/runtime-context-builder.ts      有界 Runtime 上下文快照
+apps/server/src/policy.ts                       Bouncer 服务端资源策略
+scripts/                                       本地 POC、部署与初始化脚本
+docs/                                          架构、赛道设计、运行和部署说明
+Dockerfile.runtime                             一次性本地 Agent Runtime
 ```
 
 ## 当前限制
