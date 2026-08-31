@@ -24,7 +24,7 @@ export interface ParsedEvents {
 function vaultOperation(command: unknown): RuntimeToolEvent["operation"] | null {
   if (typeof command !== "string") return null;
   const match = command.match(
-    /(?:^|\s)node\s+\.launchpad\/tools\/vault\.mjs\s+(list|read|assess|disclose)(?:\s|$)/,
+    /(?:^|\s)node\s+\.launchpad\/tools\/vault\.mjs\s+(list|read|assess|disclose|resolve|forward|request-forward)(?:\s|$)/,
   );
   return (match?.[1] as RuntimeToolEvent["operation"] | undefined) ?? null;
 }

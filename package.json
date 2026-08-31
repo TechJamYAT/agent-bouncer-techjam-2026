@@ -2,7 +2,7 @@
   "name": "volc-agent-launchpad",
   "version": "1.0.0",
   "private": true,
-  "description": "A Bouncer middleware demo with scoped processing, disclosure control, and evidence-gated Agent Runs.",
+  "description": "A Bouncer middleware demo with scoped reads, intent-bound forwarding, cross-owner denial, and auditable Agent Runs.",
   "type": "module",
   "workspaces": [
     "apps/*"

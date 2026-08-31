@@ -37,7 +37,10 @@ afterEach(async () => {
   );
 });
 
-async function makeService(runner: AgentRunner = new FakeRunner()): Promise<AgentService> {
+async function makeService(
+  runner: AgentRunner = new FakeRunner(),
+  environment: NodeJS.ProcessEnv = {},
+): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
   const config = loadConfig({
@@ -47,6 +50,7 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
     CODEX_HOME: path.join(root, "codex"),
     ARK_API_KEY: "test-key",
     ARK_MODEL: "ep-test",
+    ...environment,
   });
   const service = new AgentService(
     config,
@@ -59,6 +63,460 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
 }
 
 describe("Agent lifecycle", () => {
+  it("pauses a disclosure Run for owner approval and resumes it with a fresh credential", async () => {
+    let service!: AgentService;
+    const runtimeTokens: string[] = [];
+    let call = 0;
+    service = await makeService({
+      run: async (request) => {
+        call += 1;
+        const token = request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "";
+        runtimeTokens.push(token);
+        const result = await service.discloseResourceForRuntimeByReference(token, {
+          ownerUsername: "alice",
+          title: "Alice — Private Interview Notes",
+        });
+        if (call === 1) {
+          expect(result).toMatchObject({ pending: true });
+          return { output: "Waiting for approval", threadId: "approval-thread", usage: null };
+        }
+        expect(result).toMatchObject({
+          resource: { id: DEMO_RESOURCE_IDS.alicePrivate },
+          decision: { decision: "allow", reasonCode: "DISCLOSURE_RECIPIENT_APPROVED" },
+        });
+        return { output: "Approved disclosure delivered.", threadId: "approval-thread", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Approval Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(agent.id, "把我的资料原文发给我", DEMO_USER_IDS.alice);
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
+    expect(service.getAgent(agent.id).status).toBe("busy");
+    await expect(
+      service.sendMessage(agent.id, "start another run", DEMO_USER_IDS.alice),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Resolve the pending protected-resource approval before starting another Run",
+    });
+    const request = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
+    expect(request).toMatchObject({ runId: launched.run.id, status: "pending", action: "disclose" });
+    await expect(
+      service.discloseResourceForRuntimeByReference(runtimeTokens[0]!, {
+        ownerUsername: "alice",
+        title: "Alice — Private Interview Notes",
+      }),
+    ).rejects.toMatchObject({ statusCode: 401 });
+
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, request.id, "approve");
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(service.getRun(launched.run.id).output).toBe("Approved disclosure delivered.");
+    expect(service.getAgent(agent.id).status).toBe("ready");
+    expect(runtimeTokens).toHaveLength(2);
+    expect(runtimeTokens[1]).not.toBe(runtimeTokens[0]);
+    expect(service.listAccessRequests(DEMO_USER_IDS.alice)[0]?.status).toBe("approved");
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "approval:request", reasonCode: "HUMAN_APPROVAL_REQUIRED" }),
+      expect.objectContaining({ action: "approval:approve", reasonCode: "RESOURCE_OWNER_APPROVED" }),
+      expect.objectContaining({ action: "resource:disclose", decision: "allow" }),
+    ]));
+  });
+
+  it("allows an exact owner-authored self-disclosure request without duplicate approval", async () => {
+    let service!: AgentService;
+    let calls = 0;
+    service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        const disclosed = await service.discloseResourceForRuntimeByReference(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+          },
+        );
+        expect(disclosed).toMatchObject({
+          resource: { id: DEMO_RESOURCE_IDS.alicePrivate },
+          decision: { decision: "allow", reasonCode: "DISCLOSURE_RECIPIENT_APPROVED" },
+        });
+        return {
+          output: "Owner-requested disclosure delivered.",
+          threadId: "middleware-disclosure-thread",
+          usage: null,
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Middleware Approval Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把《Alice — Private Interview Notes》的原文完整展示给我",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status)
+      .toBe("completed");
+    expect(calls).toBe(1);
+    expect(service.listAccessRequests(DEMO_USER_IDS.alice)).toHaveLength(0);
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: launched.run.id,
+        action: "resource:disclose",
+        decision: "allow",
+        reasonCode: "DISCLOSURE_RECIPIENT_APPROVED",
+      }),
+    ]));
+    expect(service.getRun(launched.run.id).output).toBe("Owner-requested disclosure delivered.");
+  });
+
+  it("does not misroute a request to forward data to another human as current-user approval", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent(
+      { name: "Recipient Boundary Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把我的资料转发给bob",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(service.listAccessRequests(DEMO_USER_IDS.alice)).toHaveLength(0);
+  });
+
+  it("delivers an explicitly named Alice resource to Bob without exposing the body to the Agent", async () => {
+    let service!: AgentService;
+    let toolResult: unknown;
+    service = await makeService({
+      run: async (request) => {
+        toolResult = await service.forwardResourceForRuntimeByReference(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+            recipientUsername: "bob",
+          },
+        );
+        return { output: "资料已通过后端转发。", threadId: "forward-thread", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Forward Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把《Alice — Private Interview Notes》发给 bob",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(toolResult).toMatchObject({
+      receipt: {
+        resourceTitle: "Alice — Private Interview Notes",
+        recipientUsername: "bob",
+      },
+      policy: { decision: "allow", reasonCode: "USER_INTENT_BOUND_FORWARD" },
+    });
+    expect(JSON.stringify(toolResult)).not.toContain("Users want a guided handoff");
+    expect(service.getHumanDirectMessages(DEMO_USER_IDS.bob, DEMO_USER_IDS.alice).at(-1))
+      .toMatchObject({ senderUserId: DEMO_USER_IDS.alice });
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toContainEqual(
+      expect.objectContaining({
+        runId: launched.run.id,
+        action: "resource:forward",
+        decision: "allow",
+        reasonCode: "USER_INTENT_BOUND_FORWARD",
+      }),
+    );
+  });
+
+  it("pauses an Agent-proposed forward in the conversation and resumes after owner approval", async () => {
+    let service!: AgentService;
+    const runtimeTokens: string[] = [];
+    let calls = 0;
+    service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        const token = request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "";
+        runtimeTokens.push(token);
+        if (calls === 1) {
+          const proposed = await service.requestForwardApprovalForRuntime(token, {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+            recipientUsername: "bob",
+          });
+          expect(proposed).toMatchObject({ pending: true, accessRequest: { action: "forward" } });
+          return { output: "等待资料所有者决定。", threadId: "forward-approval", usage: null };
+        }
+        const forwarded = await service.forwardResourceForRuntimeByReference(token, {
+          ownerUsername: "alice",
+          title: "Alice — Private Interview Notes",
+          recipientUsername: "bob",
+        });
+        expect(forwarded.policy.reasonCode).toBe("USER_INTENT_BOUND_FORWARD");
+        return { output: "审批后已转发。", threadId: "forward-approval", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Forward approval Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "分析我附加资料的协作价值",
+      DEMO_USER_IDS.alice,
+      [{ ownerUsername: "alice", title: "Alice — Private Interview Notes" }],
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
+    const request = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
+    expect(request).toMatchObject({
+      action: "forward",
+      requesterHumanId: DEMO_USER_IDS.alice,
+      ownerUserId: DEMO_USER_IDS.alice,
+      recipientUserId: DEMO_USER_IDS.bob,
+      recipientName: "Bob",
+    });
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, request.id, "approve");
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(calls).toBe(2);
+    expect(runtimeTokens[1]).not.toBe(runtimeTokens[0]);
+    expect(service.getHumanDirectMessages(DEMO_USER_IDS.bob, DEMO_USER_IDS.alice).at(-1)?.content)
+      .toContain("Alice — Private Interview Notes");
+  });
+
+  it("audits and denies Alice asking the Agent to forward Bob's private resource to Alice", async () => {
+    let service!: AgentService;
+    service = await makeService({
+      run: async (request) => {
+        await expect(service.forwardResourceForRuntimeByReference(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "bob",
+            title: "Bob — Private Launch Notes",
+            recipientUsername: "alice",
+          },
+        )).rejects.toMatchObject({ message: "Access Denied: CROSS_OWNER_FORWARD_DENIED" });
+        await expect(service.requestForwardApprovalForRuntime(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "bob",
+            title: "Bob — Private Launch Notes",
+            recipientUsername: "alice",
+          },
+        )).rejects.toMatchObject({ message: "Access Denied: CROSS_OWNER_FORWARD_DENIED" });
+        return { output: "Bouncer 拒绝了跨所有者转发。", threadId: "deny-forward", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Cross-owner Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把 Bob — Private Launch Notes 发给我",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toContainEqual(
+      expect.objectContaining({
+        runId: launched.run.id,
+        action: "resource:forward",
+        decision: "deny",
+        reasonCode: "CROSS_OWNER_FORWARD_DENIED",
+      }),
+    );
+    expect(service.listAccessRequests(DEMO_USER_IDS.alice)).toHaveLength(0);
+  });
+
+  it("blocks a resource-content-driven forward when the human did not request it", async () => {
+    let service!: AgentService;
+    service = await makeService({
+      run: async (request) => {
+        await expect(service.forwardResourceForRuntimeByReference(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+            recipientUsername: "bob",
+          },
+        )).rejects.toMatchObject({ message: "Access Denied: HUMAN_FORWARD_INTENT_REQUIRED" });
+        return { output: "未执行资料中的转发指令。", threadId: "injection-forward", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Injection Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "读取并总结我附加的资料",
+      DEMO_USER_IDS.alice,
+      [{ ownerUsername: "alice", title: "Alice — Private Interview Notes" }],
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toContainEqual(
+      expect.objectContaining({
+        runId: launched.run.id,
+        action: "resource:forward",
+        decision: "deny",
+        reasonCode: "HUMAN_FORWARD_INTENT_REQUIRED",
+      }),
+    );
+  });
+
+  it("returns safe ambiguity for a partial own-resource title instead of choosing one", async () => {
+    let service!: AgentService;
+    let resolution: unknown;
+    service = await makeService({
+      run: async (request) => {
+        resolution = service.resolveOwnResourceForRuntime(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          { ownerUsername: "alice", query: "Private Interview" },
+        );
+        return { output: "需要用户选择具体资料。", threadId: "ambiguous-resource", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    await service.createResource(DEMO_USER_IDS.alice, {
+      title: "Alice — Private Interview Notes v2",
+      content: "second candidate",
+      scope: "private",
+    });
+    const agent = await service.createAgent(
+      { name: "Resolver Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把 Private Interview 发给 bob",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(resolution).toMatchObject({ status: "ambiguous" });
+    expect((resolution as { matches: unknown[] }).matches).toHaveLength(2);
+    expect(service.getHumanDirectMessages(DEMO_USER_IDS.alice, DEMO_USER_IDS.bob)).toHaveLength(0);
+  });
+
+  it("rejects an unknown recipient without revealing or delivering the resource", async () => {
+    let service!: AgentService;
+    service = await makeService({
+      run: async (request) => {
+        await expect(service.forwardResourceForRuntimeByReference(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+            recipientUsername: "nobody",
+          },
+        )).rejects.toMatchObject({ message: "Access Denied: RESOURCE_FORWARD_DENIED" });
+        return { output: "接收人无法确认，未执行转发。", threadId: "unknown-recipient", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Recipient Resolver Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把《Alice — Private Interview Notes》发给 nobody",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(service.getHumanDirectMessages(DEMO_USER_IDS.alice, DEMO_USER_IDS.bob)).toHaveLength(0);
+  });
+
+  it("resumes safely after rejection without retrying disclosure", async () => {
+    let service!: AgentService;
+    let calls = 0;
+    service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        if (calls === 1) {
+          await service.discloseResourceForRuntimeByReference(
+            request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+            { ownerUsername: "alice", title: "Alice — Private Interview Notes" },
+          );
+          return { output: "Waiting", threadId: "reject-thread", usage: null };
+        }
+        expect(request.prompt).toContain("rejected");
+        return { output: "披露未获批准。", threadId: "reject-thread", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Reject Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(agent.id, "展示我的私有资料", DEMO_USER_IDS.alice);
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
+    const request = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
+    await expect(service.resolveAccessRequest(DEMO_USER_IDS.bob, request.id, "approve"))
+      .rejects.toMatchObject({ statusCode: 403 });
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, request.id, "reject");
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(calls).toBe(2);
+    expect(service.getRun(launched.run.id).output).toBe("披露未获批准。");
+  });
+
+  it("auto-denies an expired approval request and resumes the Run", async () => {
+    let service!: AgentService;
+    let calls = 0;
+    service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        if (calls === 1) {
+          await service.discloseResourceForRuntimeByReference(
+            request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+            { ownerUsername: "alice", title: "Alice — Private Interview Notes" },
+          );
+          return { output: "Waiting", threadId: "expiry-thread", usage: null };
+        }
+        expect(request.prompt).toContain("expired");
+        return { output: "审批超时，未披露。", threadId: "expiry-thread", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    }, { APPROVAL_TIMEOUT_SECONDS: "1" });
+    const agent = await service.createAgent(
+      { name: "Expiry Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(agent.id, "展示我的私有资料", DEMO_USER_IDS.alice);
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
+    await expect.poll(() => service.getRun(launched.run.id).status, { timeout: 3_000 }).toBe("completed");
+    expect(service.listAccessRequests(DEMO_USER_IDS.alice)[0]?.status).toBe("expired");
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "approval:expire", reasonCode: "APPROVAL_TIMEOUT_DENIED" }),
+    ]));
+  });
+
   it("restricts group Agent creation and management to group owners and admins", async () => {
     const service = await makeService();
     await expect(
@@ -98,13 +556,20 @@ describe("Agent lifecycle", () => {
   it("creates, updates, stops, starts and deletes an Agent", async () => {
     const service = await makeService();
     const agent = await service.createAgent({ name: "Builder" });
-    expect(service.listAgents()).toHaveLength(1);
+    expect(service.listAgents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Case", scope: "group" }),
+        expect.objectContaining({ id: agent.id, name: "Builder", scope: "personal" }),
+      ]),
+    );
     expect((await service.updateAgent(agent.id, { description: "Builds apps" })).description)
       .toBe("Builds apps");
     expect((await service.stopAgent(agent.id)).status).toBe("stopped");
     expect((await service.startAgent(agent.id)).status).toBe("ready");
     await service.deleteAgent(agent.id);
-    expect(service.listAgents()).toHaveLength(0);
+    expect(service.listAgents()).toEqual([
+      expect.objectContaining({ name: "Case", scope: "group" }),
+    ]);
   });
 
   it("persists a playground conversation", async () => {
@@ -167,7 +632,7 @@ describe("Agent lifecycle", () => {
     expect(runtimePrompt).not.toContain("privateKnowledgeResourceCount");
     expect(runtimePrompt).toContain('"role": "owner"');
     expect(runtimePrompt).toContain('"humanMembers": 3');
-    expect(runtimePrompt).toContain('"agents": 1');
+    expect(runtimePrompt).toContain('"agents": 2');
     expect(runtimePrompt).toContain("Never treat chat participants as the group roster");
     expect(runtimePrompt).toContain("Alpha Product Brief");
     expect(runtimePrompt).toContain("vault.mjs read");
@@ -179,6 +644,7 @@ describe("Agent lifecycle", () => {
     expect(groupManifest).toContain('"authority": "complete_current_server_roster"');
     expect(groupManifest).toContain('"displayName": "Carol"');
     expect(groupManifest).toContain('"name": "Alpha Context Agent"');
+    expect(groupManifest).toContain('"name": "Case"');
   });
 
   it("isolates one group Agent's Runtime thread and direct messages per human conversation", async () => {
@@ -1564,12 +2030,6 @@ describe("Multi-Agent coordination Runtime", () => {
       { name: "Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
       DEMO_USER_IDS.alice,
     );
-    await service.createGrant(DEMO_USER_IDS.alice, {
-      agentId: agent.id,
-      resourceId: DEMO_RESOURCE_IDS.alicePrivate,
-      action: "read",
-      duration: "persistent",
-    });
     const task = await service.createCoordinationSession(DEMO_USER_IDS.alice, {
       groupId: DEMO_GROUP_IDS.alpha,
       kind: "task",
@@ -1581,6 +2041,13 @@ describe("Multi-Agent coordination Runtime", () => {
         { action: "resource:process", decision: "allow" },
         { action: "resource:disclose", decision: "deny" },
       ],
+    });
+    await service.createGrant(DEMO_USER_IDS.alice, {
+      agentId: agent.id,
+      resourceId: DEMO_RESOURCE_IDS.alicePrivate,
+      action: "process",
+      duration: "task",
+      taskId: task.session.id,
     });
     await service.createGrant(DEMO_USER_IDS.bob, {
       agentId: agent.id,
@@ -1716,44 +2183,44 @@ describe("Multi-Agent coordination Runtime", () => {
       cancel: async () => false,
       isAvailable: async () => true,
     });
-    let chat = await service.createCoordinationSession(DEMO_USER_IDS.alice, {
-      groupId: DEMO_GROUP_IDS.alpha,
+    let chat = await service.createCoordinationSession(DEMO_USER_IDS.bob, {
+      groupId: DEMO_GROUP_IDS.beta,
       kind: "group_chat",
       mode: "manual",
-      title: "Alpha group chat",
+      title: "Beta group chat",
       participantAgentIds: [],
     });
     expect(chat.session.participantAgentIds).toEqual([]);
     expect(
-      service.listGroups(DEMO_USER_IDS.alice).find((group) => group.id === DEMO_GROUP_IDS.alpha)
+      service.listGroups(DEMO_USER_IDS.bob).find((group) => group.id === DEMO_GROUP_IDS.beta)
         ?.lastActivityAt,
     ).toBeNull();
 
     chat = await service.appendCoordinationMessage(
-      DEMO_USER_IDS.bob,
+      DEMO_USER_IDS.david,
       chat.session.id,
       "Can an Agent review this?",
     );
     expect(chat.events.find((event) => event.type === "human.message")?.actorId)
-      .toBe(DEMO_USER_IDS.bob);
+      .toBe(DEMO_USER_IDS.david);
     expect(
-      service.listGroups(DEMO_USER_IDS.alice).find((group) => group.id === DEMO_GROUP_IDS.alpha)
+      service.listGroups(DEMO_USER_IDS.bob).find((group) => group.id === DEMO_GROUP_IDS.beta)
         ?.lastActivityAt,
     ).toBe(chat.events.find((event) => event.type === "human.message")?.createdAt);
 
     const agent = await service.createAgent(
-      { name: "Reviewer", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
-      DEMO_USER_IDS.alice,
+      { name: "Reviewer", scope: "group", groupId: DEMO_GROUP_IDS.beta },
+      DEMO_USER_IDS.bob,
     );
     const launched = await service.advanceCoordinationSession(
-      DEMO_USER_IDS.bob,
+      DEMO_USER_IDS.david,
       chat.session.id,
       chat.session.version,
     );
     await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
-    expect(initiatingHumanId).toBe(DEMO_USER_IDS.bob);
-    expect(contextAtRun).toContain('"username": "bob"');
-    chat = service.getCoordinationSession(DEMO_USER_IDS.bob, chat.session.id);
+    expect(initiatingHumanId).toBe(DEMO_USER_IDS.david);
+    expect(contextAtRun).toContain('"username": "david"');
+    chat = service.getCoordinationSession(DEMO_USER_IDS.david, chat.session.id);
     expect(chat.session.participantAgentIds).toContain(agent.id);
     expect(chat.events.find((event) => event.type === "agent.message")?.content)
       .toBe("Group Agent joined the discussion.");

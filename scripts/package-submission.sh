@@ -40,6 +40,7 @@ archive="$temporary_dir/submission.zip"
       "$repo_name/*/*/dist/*" \
       "$repo_name/.data/*" \
       "$repo_name/.local/*" \
+      "$repo_name/tmp/*" \
       "$repo_name/data/*" \
       "$repo_name/workspaces/*" \
       "$repo_name/codex-home/*" \
@@ -55,7 +56,7 @@ archive="$temporary_dir/submission.zip"
       "$repo_name/**/*.tsbuildinfo"
 )
 
-if unzip -Z1 "$archive" | grep -Eq '(^|/)(\.env|node_modules|\.data|\.local|workspaces|codex-home)(/|$)|\.sqlite(-[^/]*)?$'; then
+if unzip -Z1 "$archive" | grep -Eq '(^|/)(\.env|node_modules|\.data|\.local|tmp|workspaces|codex-home)(/|$)|\.sqlite(-[^/]*)?$'; then
   printf '[package] Safety check failed: the archive contains local state or secrets.\n' >&2
   exit 3
 fi

@@ -23,10 +23,23 @@ codex_sandbox_mode="${CODEX_SANDBOX_MODE:-workspace-write}"
 # NUS SOCaaS is OpenAI-compatible. Accept its variable names as local aliases
 # so participants do not need to duplicate the same credential as ARK_*.
 if [[ -z "${ARK_API_KEY:-}" && -z "${NUS_API_KEY:-}" && -t 0 ]]; then
-  printf 'NUS API Key: ' >&2
-  IFS= read -r -s NUS_API_KEY
+  printf '[local-poc] No model credential was found in the environment or .env.\n' >&2
+  printf 'OpenAI-compatible API key (hidden; not saved): ' >&2
+  IFS= read -r -s model_api_key
   printf '\n' >&2
-  export NUS_API_KEY
+  export ARK_API_KEY="$model_api_key"
+  if [[ -z "${ARK_MODEL:-}" && -z "${NUS_MODEL:-}" ]]; then
+    printf 'Model or endpoint ID: ' >&2
+    IFS= read -r model_id
+    export ARK_MODEL="$model_id"
+  fi
+  if [[ -z "${ARK_BASE_URL:-}" && -z "${NUS_URL:-}" ]]; then
+    printf 'Responses API base URL [https://ark.cn-beijing.volces.com/api/v3]: ' >&2
+    IFS= read -r model_base_url
+    if [[ -n "$model_base_url" ]]; then
+      export ARK_BASE_URL="$model_base_url"
+    fi
+  fi
 fi
 if [[ -z "${ARK_API_KEY:-}" && -n "${NUS_API_KEY:-}" ]]; then
   export ARK_API_KEY="$NUS_API_KEY"
@@ -91,9 +104,11 @@ detect_engine() {
 }
 
 if [[ -z "${ARK_API_KEY:-}" || -z "${ARK_MODEL:-}" ]]; then
-  log "ARK_API_KEY/ARK_MODEL or NUS_API_KEY/NUS_MODEL are required."
+  log "A model credential and model ID are required."
+  log "Copy .env.example to .env and configure ARK_* or NUS_* values, then retry."
   exit 2
 fi
+log "Model provider: OpenAI-compatible Responses API; credential: configured ([REDACTED])."
 
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-3000}"
@@ -173,6 +188,13 @@ fi
 export RUNTIME_INSTANCE_ID="${RUNTIME_INSTANCE_ID:-local-$(id -u)-$(printf '%s' "$repo_dir" | cksum | awk '{print $1}')}"
 
 mkdir -p "$APP_DATA_DIR" "$AGENT_WORKSPACE_ROOT" "$CODEX_HOME"
+# Docker Desktop and Colima see canonical macOS paths such as /private/var,
+# while mktemp commonly reports the /var symlink. Resolve every bind source
+# after creation so the daemon receives paths that exist in its filesystem view.
+export APP_DATA_DIR="$(cd "$APP_DATA_DIR" && pwd -P)"
+export AGENT_WORKSPACE_ROOT="$(cd "$AGENT_WORKSPACE_ROOT" && pwd -P)"
+export CODEX_HOME="$(cd "$CODEX_HOME" && pwd -P)"
+local_state_root="$(cd "$local_state_root" && pwd -P)"
 log "Persistent state: $local_state_root"
 export CONTAINER_USER="${CONTAINER_USER:-$(id -u):$(id -g)}"
 

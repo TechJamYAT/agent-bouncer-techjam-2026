@@ -71,6 +71,13 @@ const runtimeResourceDisclosureBody = z.object({
   ownerUsername: z.string().trim().min(1).max(80),
   title: z.string().trim().min(1).max(200).optional(),
 }).strict();
+const runtimeResourceResolveBody = z.object({
+  ownerUsername: z.string().trim().min(1).max(80),
+  query: z.string().trim().min(1).max(200),
+}).strict();
+const runtimeResourceForwardBody = runtimeResourceReferenceBody.extend({
+  recipientUsername: z.string().trim().min(1).max(80),
+}).strict();
 const artifactPublicationBody = z.object({
   sourceRelativePath: z.string().trim().min(1).max(1024),
   destinationRelativePath: z.string().trim().min(1).max(1024),
@@ -90,9 +97,9 @@ const contextImportBody = z.discriminatedUnion("mode", [
   }).strict(),
 ]);
 const middlewareEvidenceRequirementsBody = z.array(z.object({
-  action: z.enum(["resource:read", "resource:process", "resource:disclose"]),
+  action: z.enum(["resource:read", "resource:process", "resource:disclose", "resource:forward"]),
   decision: z.enum(["allow", "deny"]),
-}).strict()).min(1).max(3).refine(
+}).strict()).min(1).max(4).refine(
   (requirements) => new Set(requirements.map((requirement) => requirement.action)).size === requirements.length,
   "Each middleware action may appear only once",
 );
@@ -592,6 +599,24 @@ export async function createApp(
     decisions: service.listDecisions(requireUser(request).id),
   }));
 
+  app.get("/api/access-requests", async (request) => ({
+    accessRequests: service.listAccessRequests(requireUser(request).id),
+  }));
+
+  app.post("/api/access-requests/:id/approve", async (request) => {
+    const { id } = idParams.parse(request.params);
+    return {
+      accessRequest: await service.resolveAccessRequest(requireUser(request).id, id, "approve"),
+    };
+  });
+
+  app.post("/api/access-requests/:id/reject", async (request) => {
+    const { id } = idParams.parse(request.params);
+    return {
+      accessRequest: await service.resolveAccessRequest(requireUser(request).id, id, "reject"),
+    };
+  });
+
   app.get("/api/artifact-publications", async (request) => ({
     publications: service.listArtifactPublications(requireUser(request).id),
   }));
@@ -630,14 +655,39 @@ export async function createApp(
     return service.processResourceForRuntimeByReference(runtimeToken(request), reference);
   });
 
-  app.post("/api/runtime/resources/disclose", async (request) => {
+  app.post("/api/runtime/resources/disclose", async (request, reply) => {
     const reference = runtimeResourceDisclosureBody.parse(request.body);
-    return reference.title
+    const result = await (reference.title
       ? service.discloseResourceForRuntimeByReference(runtimeToken(request), {
           ownerUsername: reference.ownerUsername,
           title: reference.title,
         })
-      : service.requestOwnerDisclosureForRuntime(runtimeToken(request), reference);
+      : service.requestOwnerDisclosureForRuntime(runtimeToken(request), reference));
+    return "pending" in result && result.pending
+      ? reply.code(202).send(result)
+      : result;
+  });
+
+  app.post("/api/runtime/resources/resolve", async (request) =>
+    service.resolveOwnResourceForRuntime(
+      runtimeToken(request),
+      runtimeResourceResolveBody.parse(request.body),
+    )
+  );
+
+  app.post("/api/runtime/resources/forward", async (request) =>
+    service.forwardResourceForRuntimeByReference(
+      runtimeToken(request),
+      runtimeResourceForwardBody.parse(request.body),
+    )
+  );
+
+  app.post("/api/runtime/resources/forward-request", async (request, reply) => {
+    const result = await service.requestForwardApprovalForRuntime(
+      runtimeToken(request),
+      runtimeResourceForwardBody.parse(request.body),
+    );
+    return reply.code(202).send(result);
   });
 
   app.get("/api/runtime/workspace/shared", async (request) => ({

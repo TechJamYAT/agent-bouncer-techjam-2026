@@ -1,5 +1,6 @@
 import type {
   Agent,
+  ForwardIntentGrant,
   GroupMembership,
   ProtectedResource,
   ResourceGrant,
@@ -20,6 +21,11 @@ export interface PolicyResult {
   decision: "allow" | "deny";
   reasonCode: string;
   detail: string;
+}
+
+export interface ResourceForwardPolicyInput extends ResourceReadPolicyInput {
+  recipientUserId: string;
+  intentGrants: ForwardIntentGrant[];
 }
 
 const allow = (reasonCode: string, detail: string): PolicyResult => ({
@@ -154,11 +160,23 @@ export function evaluateResourceProcess(input: ResourceReadPolicyInput): PolicyR
 }
 
 export function evaluateResourceDisclosure(input: ResourceReadPolicyInput): PolicyResult {
-  if (input.resource.scope === "private" && input.resource.ownerUserId !== input.humanId) {
-    return deny(
-      "PRIVATE_DISCLOSURE_RECIPIENT_DENIED",
-      "Processing permission does not authorize disclosure to the initiating human.",
-    );
+  if (input.resource.scope === "private") {
+    if (input.resource.ownerUserId !== input.humanId) {
+      return deny(
+        "PRIVATE_DISCLOSURE_RECIPIENT_DENIED",
+        "Processing permission does not authorize disclosure to the initiating human.",
+      );
+    }
+    const disclosureGrant = activeGrant(input, ["disclose"]);
+    return disclosureGrant
+      ? allow(
+          "DISCLOSURE_RECIPIENT_APPROVED",
+          "The resource owner approved disclosure to the initiating human for this Run.",
+        )
+      : deny(
+          "PRIVATE_GRANT_REQUIRED",
+          "Read or processing permission does not authorize raw private-content disclosure.",
+        );
   }
   const read = evaluateResourceRead(input);
   return read.decision === "deny"
@@ -166,5 +184,56 @@ export function evaluateResourceDisclosure(input: ResourceReadPolicyInput): Poli
     : allow(
         "DISCLOSURE_RECIPIENT_APPROVED",
         "The initiating human is permitted to receive the protected resource contents.",
+      );
+}
+
+export function evaluateResourceForward(input: ResourceForwardPolicyInput): PolicyResult {
+  const { agent, humanId, resource, recipientUserId } = input;
+  if (agent.status === "stopped" || agent.status === "error") {
+    return deny("AGENT_DISABLED", "The executing Agent is not enabled.");
+  }
+  if (resource.scope !== "private" || resource.ownerUserId !== humanId) {
+    return deny(
+      "CROSS_OWNER_FORWARD_DENIED",
+      "The initiating human cannot authorize forwarding another owner's private resource.",
+    );
+  }
+  if (recipientUserId === humanId) {
+    return deny(
+      "FORWARD_RECIPIENT_INVALID",
+      "Forwarding requires a distinct registered recipient.",
+    );
+  }
+  if (agent.scope === "personal" && agent.ownerUserId !== humanId) {
+    return deny(
+      "PERSONAL_AGENT_OWNER_MISMATCH",
+      "Only the owning human may use this personal Agent.",
+    );
+  }
+  if (agent.groupId && !isMember(input.memberships, agent.groupId, humanId)) {
+    return deny(
+      "HUMAN_NOT_GROUP_MEMBER",
+      "The initiating human is not a current member of the Agent's group.",
+    );
+  }
+  const timestamp = input.now ?? new Date();
+  const intent = input.intentGrants.find((grant) =>
+    grant.initiatingHumanId === humanId &&
+    grant.agentId === agent.id &&
+    grant.runId === input.runId &&
+    grant.resourceId === resource.id &&
+    grant.recipientUserId === recipientUserId &&
+    grant.status === "active" &&
+    grant.revokedAt === null &&
+    new Date(grant.expiresAt) > timestamp
+  );
+  return intent
+    ? allow(
+        "USER_INTENT_BOUND_FORWARD",
+        "A human-authored message authorized this exact resource and recipient for the current Run.",
+      )
+    : deny(
+        "HUMAN_FORWARD_INTENT_REQUIRED",
+        "Agent output and protected content cannot authorize an external forward.",
       );
 }

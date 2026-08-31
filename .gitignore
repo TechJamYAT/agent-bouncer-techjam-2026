@@ -8,6 +8,7 @@ data/
 workspaces/
 codex-home/
 coverage/
+tmp/
 *.log
 *.tsbuildinfo
 .DS_Store

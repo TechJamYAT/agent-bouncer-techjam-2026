@@ -90,7 +90,8 @@ describe("JsonStore", () => {
     const store = new JsonStore(filePath);
     await store.initialize();
     const database = store.snapshot();
-    expect(database.version).toBe(5);
+    expect(database.version).toBe(7);
+    expect(database.accessRequests).toEqual([]);
     expect(database.workspaces).toHaveLength(2);
     expect(database.projects.map((item) => item.sourceAgentId)).toEqual(
       expect.arrayContaining(["personal-agent", "group-agent"]),
@@ -138,7 +139,8 @@ describe("JsonStore", () => {
 
     const migrated = new JsonStore(filePath);
     await migrated.initialize();
-    expect(migrated.snapshot().version).toBe(5);
+    expect(migrated.snapshot().version).toBe(7);
+    expect(migrated.snapshot().forwardIntentGrants).toEqual([]);
     expect(migrated.snapshot().messages[0]?.content).toBe("preserve me");
     expect(migrated.snapshot().messages[0]?.conversationId).toBeTruthy();
     expect(migrated.snapshot().conversations).toHaveLength(1);

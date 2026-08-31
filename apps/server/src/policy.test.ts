@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEMO_GROUP_IDS, DEMO_RESOURCE_IDS, DEMO_USER_IDS } from "./demo-data.js";
 import {
   evaluateResourceDisclosure,
+  evaluateResourceForward,
   evaluateResourceProcess,
   evaluateResourceRead,
 } from "./policy.js";
@@ -10,6 +11,7 @@ import type {
   GroupMembership,
   ProtectedResource,
   ResourceGrant,
+  ForwardIntentGrant,
 } from "./types.js";
 
 const baseAgent: Agent = {
@@ -84,7 +86,72 @@ function grant(overrides: Partial<ResourceGrant> = {}): ResourceGrant {
   };
 }
 
+function forwardIntent(overrides: Partial<ForwardIntentGrant> = {}): ForwardIntentGrant {
+  return {
+    id: "forward-intent-1",
+    initiatingHumanId: DEMO_USER_IDS.alice,
+    agentId: baseAgent.id,
+    runId: "run-1",
+    conversationId: "conversation-1",
+    sourceMessageId: "message-1",
+    resourceId: alicePrivate.id,
+    recipientUserId: DEMO_USER_IDS.bob,
+    status: "active",
+    expiresAt: "2026-08-26T01:00:00.000Z",
+    deliveredMessageId: null,
+    createdAt: "2026-08-26T00:00:00.000Z",
+    consumedAt: null,
+    revokedAt: null,
+    ...overrides,
+  };
+}
+
 describe("Bouncer resource policy", () => {
+  it("allows only a human-intent-bound forward of the owner's resource", () => {
+    const input = {
+      humanId: DEMO_USER_IDS.alice,
+      agent: baseAgent,
+      resource: alicePrivate,
+      recipientUserId: DEMO_USER_IDS.bob,
+      memberships,
+      grants: [],
+      runId: "run-1",
+      now: new Date("2026-08-26T00:30:00.000Z"),
+    };
+    expect(evaluateResourceForward({ ...input, intentGrants: [] })).toMatchObject({
+      decision: "deny",
+      reasonCode: "HUMAN_FORWARD_INTENT_REQUIRED",
+    });
+    expect(evaluateResourceForward({ ...input, intentGrants: [forwardIntent()] })).toMatchObject({
+      decision: "allow",
+      reasonCode: "USER_INTENT_BOUND_FORWARD",
+    });
+  });
+
+  it("never lets Alice authorize forwarding Bob's private resource to herself", () => {
+    const bobPrivate = {
+      ...alicePrivate,
+      id: DEMO_RESOURCE_IDS.bobPrivate,
+      ownerUserId: DEMO_USER_IDS.bob,
+    };
+    expect(evaluateResourceForward({
+      humanId: DEMO_USER_IDS.alice,
+      agent: baseAgent,
+      resource: bobPrivate,
+      recipientUserId: DEMO_USER_IDS.alice,
+      memberships,
+      grants: [],
+      intentGrants: [forwardIntent({
+        resourceId: bobPrivate.id,
+        recipientUserId: DEMO_USER_IDS.alice,
+      })],
+      runId: "run-1",
+    })).toMatchObject({
+      decision: "deny",
+      reasonCode: "CROSS_OWNER_FORWARD_DENIED",
+    });
+  });
+
   it("requires consent before an owner's personal Agent reads private data", () => {
     const denied = evaluateResourceRead({
       humanId: DEMO_USER_IDS.alice,
@@ -108,6 +175,31 @@ describe("Bouncer resource policy", () => {
     expect(allowed).toMatchObject({
       decision: "allow",
       reasonCode: "EXPLICIT_PRIVATE_GRANT",
+    });
+  });
+
+  it("does not treat a private read grant as raw-content disclosure approval", () => {
+    const readGrant = grant({ action: "read", duration: "run", runId: "run-1" });
+    const input = {
+      humanId: DEMO_USER_IDS.alice,
+      agent: baseAgent,
+      resource: alicePrivate,
+      memberships,
+      grants: [readGrant],
+      runId: "run-1",
+    };
+    expect(evaluateResourceRead(input)).toMatchObject({ decision: "allow" });
+    expect(evaluateResourceDisclosure(input)).toMatchObject({
+      decision: "deny",
+      reasonCode: "PRIVATE_GRANT_REQUIRED",
+    });
+
+    expect(evaluateResourceDisclosure({
+      ...input,
+      grants: [grant({ action: "disclose", duration: "run", runId: "run-1" })],
+    })).toMatchObject({
+      decision: "allow",
+      reasonCode: "DISCLOSURE_RECIPIENT_APPROVED",
     });
   });
 

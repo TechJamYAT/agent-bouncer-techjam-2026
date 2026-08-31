@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   Agent,
   AgentRun,
+  AccessRequest,
   AuthorizationDecision,
   CoordinationEvent,
   CoordinationSession,
@@ -62,12 +63,20 @@ interface VersionTwoDatabase extends Omit<VersionThreeDatabase, "version" | "coo
   version: 2;
 }
 
-interface VersionFourDatabase extends Omit<Database, "version" | "sharedFiles" | "artifactPublications"> {
+interface VersionFourDatabase extends Omit<Database, "version" | "sharedFiles" | "artifactPublications" | "accessRequests" | "forwardIntentGrants"> {
   version: 4;
 }
 
+interface VersionFiveDatabase extends Omit<Database, "version" | "accessRequests" | "forwardIntentGrants"> {
+  version: 5;
+}
+
+interface VersionSixDatabase extends Omit<Database, "version" | "forwardIntentGrants"> {
+  version: 6;
+}
+
 const emptyDatabase = (): Database => ({
-  version: 5,
+  version: 7,
   users: [],
   sessions: [],
   groups: [],
@@ -84,6 +93,8 @@ const emptyDatabase = (): Database => ({
   runs: [],
   resources: [],
   grants: [],
+  forwardIntentGrants: [],
+  accessRequests: [],
   authorizationDecisions: [],
   coordinationSessions: [],
   coordinationSteps: [],
@@ -306,13 +317,21 @@ function migrateVersionThreeDatabase(previous: VersionThreeDatabase): Database {
   return migrated;
 }
 
-function migrateVersionFourDatabase(previous: VersionFourDatabase): Database {
+function migrateVersionFourDatabase(previous: VersionFourDatabase): VersionFiveDatabase {
   return {
     ...previous,
     version: 5,
     sharedFiles: [],
     artifactPublications: [],
   };
+}
+
+function migrateVersionFiveDatabase(previous: VersionFiveDatabase): VersionSixDatabase {
+  return { ...previous, version: 6, accessRequests: [] };
+}
+
+function migrateVersionSixDatabase(previous: VersionSixDatabase): Database {
+  return { ...previous, version: 7, forwardIntentGrants: [] };
 }
 
 export class JsonStore {
@@ -325,7 +344,7 @@ export class JsonStore {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     try {
       const raw = await readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as Database | LegacyDatabase | VersionTwoDatabase | VersionThreeDatabase | VersionFourDatabase;
+      const parsed = JSON.parse(raw) as Database | LegacyDatabase | VersionTwoDatabase | VersionThreeDatabase | VersionFourDatabase | VersionFiveDatabase | VersionSixDatabase;
       if (parsed.version === 1 && Array.isArray(parsed.agents)) {
         this.data = migrateVersionThreeDatabase(migrateLegacyDatabase(parsed));
         await this.persist();
@@ -342,17 +361,23 @@ export class JsonStore {
         return;
       }
       if (parsed.version === 4 && Array.isArray(parsed.users)) {
-        this.data = migrateVersionFourDatabase(parsed);
+        this.data = migrateVersionSixDatabase(migrateVersionFiveDatabase(migrateVersionFourDatabase(parsed)));
         await this.persist();
         return;
       }
-      let addedDirectMessages = false;
-      if (parsed.version === 5 && !Array.isArray((parsed as Database).directMessages)) {
-        (parsed as Database).directMessages = [];
-        addedDirectMessages = true;
+      if (parsed.version === 5 && Array.isArray(parsed.users)) {
+        if (!Array.isArray(parsed.directMessages)) parsed.directMessages = [];
+        this.data = migrateVersionSixDatabase(migrateVersionFiveDatabase(parsed));
+        await this.persist();
+        return;
+      }
+      if (parsed.version === 6 && Array.isArray(parsed.users)) {
+        this.data = migrateVersionSixDatabase(parsed);
+        await this.persist();
+        return;
       }
       if (
-        parsed.version !== 5 ||
+        parsed.version !== 7 ||
         !Array.isArray(parsed.users) ||
         !Array.isArray(parsed.agents) ||
         !Array.isArray(parsed.workspaces) ||
@@ -362,6 +387,8 @@ export class JsonStore {
         !Array.isArray(parsed.directMessages) ||
         !Array.isArray(parsed.sharedFiles) ||
         !Array.isArray(parsed.artifactPublications) ||
+        !Array.isArray(parsed.accessRequests) ||
+        !Array.isArray(parsed.forwardIntentGrants) ||
         !Array.isArray(parsed.authorizationDecisions) ||
         !Array.isArray(parsed.coordinationSessions) ||
         !Array.isArray(parsed.coordinationSteps) ||
@@ -370,7 +397,6 @@ export class JsonStore {
         throw new Error("Unsupported database format");
       }
       this.data = parsed;
-      if (addedDirectMessages) await this.persist();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;

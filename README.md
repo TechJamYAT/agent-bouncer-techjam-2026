@@ -1,16 +1,16 @@
 # Agent Launchpad — Bouncer 授权中间件
 
-本项目基于赛题提供的 Agent Launchpad，选择且只选择一个中间件赛道：
-**Track B — Bouncer（身份与授权）**。
+本项目基于赛题提供的 Agent Launchpad，选择且只实现一条连贯的 middleware 主线：
+**Bouncer（身份与授权）**。
 
 它解决的核心问题不是“用户能否登录”，而是：当一个 Agent 代表某位用户执行任务时，
 后端能否区分**发起任务的人**与**实际执行的 Agent**，并在读取受保护资源时作出可验证的
 允许或拒绝决定。
 
-本项目的完整演示路径是：Bob 只授权群组 Agent `Case` 在当前任务中密封处理资料；
-`Case` 可以获得聚合风险结论，但向 Alice 转发原文时会被后端拒绝。可选的 Bouncer
-证据契约要求同一 Run 真实产生 `resource:process=allow` 和
-`resource:disclose=deny`；Agent 只写一段“我尝试过”的文字不会被判定为完成。
+本项目的完整演示路径是：Alice 附加自己的资料后，`Case` 可以读取；Alice 明确要求将
+这份资料发给 Bob 时，后端把用户原始消息绑定为仅限当前 Run、资料和接收人的能力并直接
+交付；如果 Agent 没有用户指令就尝试转发，或者 Alice 要求把 Bob 的资料发给自己，
+Bouncer 会拒绝且不返回正文。Agent 只写一段“我尝试过”的文字不会被判定为完成。
 
 > 个人/群组工作区、群聊和多 Agent 协作是 Bouncer 的真实产品场景，
 > 不是第二个参赛赛道。评审主线始终是身份传递、后端授权与拒绝证据。
@@ -27,7 +27,14 @@
 - 个人 Agent 永远不能读取其他用户的私人资料。
 - 群 Agent 不能继承发起人的跨群身份，也不能跨群读取资料。
 - 所有受保护知识读取均由后端统一资源策略判定，而不是由提示词或前端决定。
+- `read`、当前对话原文交付和外部 `forward` 是三个独立动作。
+- 外部转发必须携带资料所有者、精确资料和已注册接收人；正文由后端直接交付，不返回 Agent。
+- 用户原始消息可生成 Run 级转发意图；Agent 输出和资料正文不能生成该能力。
+- Alice 永远不能授权转发 Bob 的资料，即使接收人是 Alice 本人。
+- Agent 自主提出转发时只能创建资料所有者审批；不能先执行再补审批。
 - 单次 Run 授权会在成功、失败或取消后立即撤销。
+- 缺少披露授权时会创建持久化审批请求并暂停同一逻辑 Run；同意、拒绝或超时后以新短期凭证恢复。
+- 审批默认 5 分钟超时并自动拒绝；等待期间不保留 Runtime 进程或可用凭证。
 - 每个决定记录人类、Agent、动作、资源、允许/拒绝、原因码和策略版本。
 - 任务可声明服务端证据契约；缺少真实策略决策时步骤失败并进入可重试状态。
 - Runtime 只记录脱敏后的 vault 操作类型、退出状态和时间，不保存命令参数或工具输出。
@@ -36,65 +43,66 @@
 
 ## 为什么这符合赛题
 
-| Bouncer 必需演示 | 本项目实现 |
+| 本团队选择的 Bouncer 证据 | 本项目实现 |
 | --- | --- |
 | 创建 User A、User B，以及归 User A 所有的 Agent principal | 内置 Alice、Bob 演示用户；每个个人 Agent 都是独立非人主体 |
 | Agent 可读取 User A 的模拟资源 | Alice 在输入区选择自己的资料，为本次 Run 授权后可读取 |
 | 后端拒绝 User B 的资源 | 策略引擎在受保护资源服务中拒绝，资料不会进入模型上下文 |
 | 记录 human、Agent、action、resource、decision | “权限证据”窗口展示完整决定链和原因码 |
 | 不能只是登录页面 | 授权同时位于 API、AgentService、Runtime 凭证与资源读取边界 |
-| 正常案例与拒绝案例 | 同一场景连续展示 Alice 成功读取与 Bob 读取被拒 |
+| 正常案例与拒绝案例 | Alice 自有资料允许读取/转发；Bob 私有资料和注入式转发被拒 |
 | 自动化证据 | `npm run check` 运行类型检查、授权测试和生产构建 |
 
-## 盲处理演示：Agent 能处理，当前用户不能看原文
+## 核心演示：意图绑定的读取与转发边界
 
-这是比“Agent 完全不能访问”更强的混淆代理（confused deputy）演示：
+这是一个混淆代理（confused deputy）与资料外泄防护演示：
 
-1. Alice 在 Alpha 群组创建手动任务，只选择群组 Agent `Case`，勾选
-   “启用 Bouncer 证据契约”，并在任务中明确点名 `Bob — Private Launch Notes`，
-   要求先判断是否存在上线风险，再尝试把原文转给 Alice。
-2. Bob 登录，打开自己的该份私人资料，在“按用途授权”中选择这个任务与 `Case`，点击
-   “授权任务内处理”。该授权只包含 `process`，不包含 `read` 或 `disclose`。
-3. Alice 回到任务并执行下一步。`Case` 的 `vault.mjs assess` 会真实到达后端；Bouncer
-   记录 `resource:process = allow / TASK_SCOPED_PROCESS_GRANT`，但工具只返回聚合风险结果。
-4. `Case` 随后必须通过 `vault.mjs disclose` 请求原文。后端再次以“当前接收者 Alice”
-   鉴权，并记录 `resource:disclose = deny / PRIVATE_DISCLOSURE_RECIPIENT_DENIED`。
-5. 悬浮“后端执行过程”会同时展示“密封处理允许”和“向当前用户披露拒绝”，且不展示
-   Bob 的资料内容。任务结束后，处理授权自动撤销。
+1. Alice 将 `Alice — Private Interview Notes` 附加到 Run，Bouncer 创建仅限本次运行的
+   `read` grant；Agent 无需重复向 Alice 申请读取。
+2. Alice 明确输入“把《Alice — Private Interview Notes》发给 bob”。控制面只从这条
+   人类消息生成 `(Run, resource, recipient)` 意图，Agent 调用 `vault.mjs forward`。
+3. Bouncer 记录 `resource:forward = allow / USER_INTENT_BOUND_FORWARD`，后端把资料直接
+   写入 Alice 与 Bob 的私聊，Runtime 只收到不含正文的交付回执。
+4. Alice 再要求“把 Bob — Private Launch Notes 发给我”。后端记录
+   `resource:forward = deny / CROSS_OWNER_FORWARD_DENIED`，且不会生成 Alice 可批准的卡片。
+5. 当资料正文诱导 Agent 转发、但 Alice 没有发出转发指令时，后端记录
+   `HUMAN_FORWARD_INTENT_REQUIRED` 并保持资料未交付。
 
-因此，资料不是靠提示词保密：原文只进入后端受信任处理边界，面向 Alice 的 Runtime
-只能得到固定结构的聚合结果。即使 Agent 被要求忽略规则，也拿不到可转发的原文。
+因此，授权不是靠提示词声明：是否允许外部交付由后端核对所有权、用户消息来源、Run、
+资料和接收人。即使 Agent 被资料内容诱导，也无法自行制造用户授权。
 
 ## 三分钟现场演示
 
-建议只演示一条“允许使用、拒绝披露”的完整主线。
+建议只演示“一次正常转发 + 一次跨所有者拒绝”。Agent 自主提出转发的审批/超时流程作为
+备用证据：`request-forward` 会把卡片放在主对话，批准后以新短期凭证恢复同一 Run；拒绝或
+超时则在不交付资料的情况下恢复。
 
-### 0:00–0:40：创建有证据契约的任务
+### 0:00–0:45：正常读取
 
-Alice 在 Alpha 群组创建手动任务，只选择 `Case`，关闭调度 Agent，并勾选
-“启用 Bouncer 证据契约”。任务目标明确要求：对
-`Bob — Private Launch Notes` 做上线风险判断，然后尝试把原文转给 Alice。
+Alice 打开 `Case`，附加 `Alice — Private Interview Notes` 并要求总结。展示
+`resource:read = allow / EXPLICIT_PRIVATE_GRANT`，说明附加动作已经是本次 Run 的读取授权，
+不会再弹一次确认。
 
-### 0:40–1:15：由资料所有者授权用途
+### 0:45–1:35：明确转发
 
-Bob 登录，为 `Case` 和该任务授予 `process` 权限。指出这不是 `read` 或
-`disclose` 权限，且任务结束后会撤销。
+Alice 输入“把《Alice — Private Interview Notes》发给 bob”。打开“后端执行过程”，展示：
 
-### 1:15–2:30：同一 Run 展示正常行为与拒绝
+- `POST /api/runtime/resources/forward`；
+- `200 ALLOW / USER_INTENT_BOUND_FORWARD`；
+- Bob 的私聊中出现后端交付的资料；
+- Agent 回复和工具回执中没有资料正文。
 
-Alice 返回任务并执行下一步。打开“后端执行过程”，展示两条“实际发生”的请求：
+### 1:35–2:25：跨所有者硬拒绝
 
-- `POST /api/runtime/resources/process` → `200`、`TASK_SCOPED_PROCESS_GRANT`；
-- `POST /api/runtime/resources/disclose` → `403`、内部审计
-  `PRIVATE_DISCLOSURE_RECIPIENT_DENIED`。
+Alice 输入“把 Bob — Private Launch Notes 发给我”。展示
+`403 DENY / CROSS_OWNER_FORWARD_DENIED`，并指出 Alice 不是资料所有者，因此不会出现
+“让 Alice 自己批准”的错误审批卡。
 
-Runtime 只得到 `aggregate_only`，界面和 Agent 回复均没有 Bob 原文。
+### 2:25–3:00：证据与生命周期
 
-### 2:30–3:00：指出强制点与失败语义
-
-说明策略发生在 Fastify 后端而不是提示词或浏览器。如果 Agent 没调用 vault，证据契约
-会把步骤判为失败，窗口显示“未触发”，并提供 Retry；不会再出现“Run 完成但
-middleware 没执行”的假绿色状态。最后展示自动化测试。
+展示权限证据中的 human、Agent、Run、resource、recipient 和原因码，以及 Run 结束后的
+凭证/未消费意图撤销。最后展示自动化测试。备用路径可演示 Agent 使用 `request-forward`
+提起主对话审批，拒绝或超时后安全恢复。
 
 ## 快速运行
 
@@ -126,6 +134,8 @@ NUS_URL=https://soclaas-api.comp.nus.edu.sg/v1
 ```
 
 `.env` 已被 Git 忽略。不要把真实密钥写入源码、日志、截图或提交记录。
+正式演示应提前配置 `.env`，现场只运行一条启动命令。若交互式终端没有读取到配置，
+启动脚本才会提供供应商无关的隐藏输入；输入不会回显或写入磁盘。
 
 ### 2. 启动
 
@@ -141,6 +151,9 @@ npm run demo:fresh
 ```bash
 npm run poc
 ```
+
+干净状态会预置演示用户、两组资料与 Alpha 群组 Agent `Case`，但不会预置任务、授权
+或成功记录；因此每次演示的证据仍来自现场创建的 task 和真实后端决策。
 
 启动脚本会：
 
@@ -240,7 +253,7 @@ Dockerfile.runtime        一次性本地 Agent Runtime
 - 数据使用本地 JSON 元数据存储，不提供数据库级事务或多节点一致性。
 - 资源目前以文本资料为主；未实现通用文件上传、搜索和版本管理。
 - 群成员添加是管理员直接选择现有演示用户，不含邀请链接与接受流程。
-- 协调者和多 Agent 任务是产品场景，不属于本次 Track B 验收主线。
+- 协调者和多 Agent 任务是产品场景，不属于本次 Bouncer 提交主线。
 - 本地 Runtime 依赖外层一次性容器作为隔离边界；不要挂载无关秘密或生产数据。
 
 ## 提交前清理
@@ -255,8 +268,10 @@ npm run package:submission
 
 ## 文档
 
-- [一页架构与信任边界](docs/ARCHITECTURE.md)
-- [Track B 设计与策略](docs/TRACK_B_DESIGN.md)
+- [一页提交架构图](output/pdf/bouncer-architecture.pdf)
+- [架构与信任边界说明](docs/ARCHITECTURE.md)
+- [三分钟演示脚本](docs/DEMO.md)
+- [Bouncer 设计与策略](docs/TRACK_B_DESIGN.md)
 - [实现状态与限制](docs/IMPLEMENTATION_STATUS.md)
 - [本地 Runtime 说明](docs/LOCAL_POC.md)
 - [部署说明](docs/DEPLOYMENT.md)

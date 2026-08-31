@@ -2,7 +2,8 @@
 
 ## Competition declaration
 
-This project targets **Track B — The Bouncer (Identity and Authorization)**.
+This project selects one coherent middleware story: **Bouncer identity and
+authorization**.
 It separates the initiating human from the Agent acting for that human and
 enforces resource ownership in the server and Runtime path. Authorization
 decision records make the selected middleware understandable; they are not a
@@ -115,8 +116,10 @@ workspace.
 
 ## Policy matrix
 
-`read` and `create` are the only Agent resource actions in the competition
-version. Agents cannot edit or delete human-authored source documents.
+The protected-data actions in the competition version are `read`, sealed
+`process`, and recipient-facing `disclose`. Resource creation remains a human or
+task-artifact lifecycle operation. Agents cannot edit or delete human-authored
+source documents.
 
 | Executing principal | Own private read | Other private read | Own-group read | Other-group read |
 | --- | --- | --- | --- | --- |

@@ -9,6 +9,7 @@ import {
 } from "./coordination.js";
 import {
   DEMO_USER_IDS,
+  demoAgents,
   demoGroups,
   demoMemberships,
   demoResources,
@@ -17,12 +18,14 @@ import {
 import { HttpError, RunCancelledError } from "./errors.js";
 import {
   evaluateResourceDisclosure,
+  evaluateResourceForward,
   evaluateResourceProcess,
   evaluateResourceRead,
 } from "./policy.js";
 import { JsonStore } from "./store.js";
 import type {
   Agent,
+  AccessRequest,
   AgentSession,
   AgentRun,
   ArtifactPublication,
@@ -40,6 +43,7 @@ import type {
   Group,
   GroupMembership,
   GroupRole,
+  ForwardIntentGrant,
   HumanDirectMessage,
   Message,
   MiddlewareEvidenceRequirement,
@@ -77,6 +81,14 @@ export interface AuthorizationDecisionView extends AuthorizationDecision {
   targetOwnerName: string | null;
 }
 
+export interface AccessRequestView extends AccessRequest {
+  resourceTitle: string;
+  agentName: string;
+  requesterName: string;
+  ownerName: string;
+  recipientName: string;
+}
+
 type AuthorizationExecutionContext = {
   runId?: string | undefined;
   taskId?: string | undefined;
@@ -85,18 +97,19 @@ type AuthorizationExecutionContext = {
 };
 
 function runtimeRequestEvidence(
-  action: "read" | "process" | "disclose",
-  reference: { ownerUsername: string; title?: string | undefined; operation?: string | undefined },
+  action: "read" | "process" | "disclose" | "forward",
+  reference: { ownerUsername: string; title?: string | undefined; operation?: string | undefined; recipientUsername?: string | undefined },
 ): Omit<AuthorizationRequestEvidence, "responseStatus"> {
   const body: Record<string, string> = { ownerUsername: reference.ownerUsername };
   if (reference.title) body.title = "[PROTECTED_TITLE]";
   if (reference.operation) body.operation = reference.operation;
+  if (reference.recipientUsername) body.recipientUsername = reference.recipientUsername;
   const titleArgument = reference.title ? ' --title "[PROTECTED_TITLE]"' : "";
   return {
     source: "agent_runtime",
     method: "POST",
     path: `/api/runtime/resources/${action}`,
-    command: `node .launchpad/tools/vault.mjs ${action === "process" ? "assess" : action} --owner ${reference.ownerUsername}${titleArgument}`,
+    command: `node .launchpad/tools/vault.mjs ${action === "process" ? "assess" : action} --owner ${reference.ownerUsername}${titleArgument}${reference.recipientUsername ? " --recipient " + reference.recipientUsername : ""}`,
     body,
     redacted: true,
   };
@@ -258,6 +271,7 @@ export class AgentService {
   }>();
   private readonly coordination: CoordinationEngine;
   private readonly automaticSchedulers = new Map<string, Promise<void>>();
+  private readonly approvalTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly config: AppConfig,
@@ -280,6 +294,7 @@ export class AgentService {
         database.users = demoUsers(seededPasswordHash);
         database.groups = demoGroups();
         database.memberships = demoMemberships();
+        database.agents = demoAgents();
         database.resources = demoResources();
       }
       const removedPublicResourceIds = new Set(
@@ -358,7 +373,9 @@ export class AgentService {
           agent.createdByUserId = DEMO_USER_IDS.alice;
         }
         if (agent.status === "busy") {
-          agent.status = "ready";
+          agent.status = database.runs.some(
+            (run) => run.agentId === agent.id && run.status === "waiting_for_approval",
+          ) ? "busy" : "ready";
           agent.updatedAt = timestamp;
         }
       }
@@ -410,6 +427,14 @@ export class AgentService {
         await this.workspaces.migrateLegacyAgentProject(workspace, project);
       } else {
         await this.workspaces.ensureProject(workspace, project);
+      }
+    }
+    for (const request of this.store.snapshot().accessRequests) {
+      const run = this.store.snapshot().runs.find((item) => item.id === request.runId);
+      if (request.status === "pending") {
+        this.scheduleApprovalTimeout(request);
+      } else if (run?.status === "waiting_for_approval") {
+        this.queueAccessRequestResume(request);
       }
     }
   }
@@ -1135,6 +1160,7 @@ export class AgentService {
       throw new HttpError(409, "Remove or stop the Agent's active coordination session first");
     }
     await this.cancelExecution(id);
+    await this.cancelWaitingApprovalRuns(id, humanId);
     await this.store.mutate((database) => {
       const stored = database.agents.find((item) => item.id === id);
       if (!stored) throw new HttpError(404, "Agent not found");
@@ -1163,6 +1189,7 @@ export class AgentService {
     const agent = this.getAgent(id);
     this.assertCanManageAgent(humanId, agent);
     await this.cancelExecution(id);
+    await this.cancelWaitingApprovalRuns(id, humanId);
     const stopped = await this.setStatus(id, "stopped");
     await this.store.mutate((database) => {
       const timestamp = now();
@@ -1333,6 +1360,45 @@ export class AgentService {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
+  listAccessRequests(humanId: string): AccessRequestView[] {
+    const database = this.store.snapshot();
+    return database.accessRequests
+      .filter((request) =>
+        request.ownerUserId === humanId || request.requesterHumanId === humanId
+      )
+      .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))
+      .map((request) => ({
+        ...request,
+        resourceTitle: database.resources.find((item) => item.id === request.resourceId)?.title
+          ?? "受保护资料",
+        agentName: database.agents.find((item) => item.id === request.agentId)?.name
+          ?? "Agent",
+        requesterName: database.users.find((item) => item.id === request.requesterHumanId)?.displayName
+          ?? request.requesterHumanId,
+        ownerName: database.users.find((item) => item.id === request.ownerUserId)?.displayName
+          ?? request.ownerUserId,
+        recipientName: database.users.find((item) => item.id === request.recipientUserId)?.displayName
+          ?? request.recipientUserId,
+      }));
+  }
+
+  async resolveAccessRequest(
+    humanId: string,
+    requestId: string,
+    resolution: "approve" | "reject",
+  ): Promise<AccessRequestView> {
+    const current = this.store.snapshot().accessRequests.find((item) => item.id === requestId);
+    if (!current) throw new HttpError(404, "Approval request not found");
+    if (current.ownerUserId !== humanId) {
+      throw new HttpError(403, "Only the resource owner may decide this request");
+    }
+    if (current.status !== "pending") {
+      throw new HttpError(409, "This approval request has already been resolved");
+    }
+    await this.finishAccessRequest(current, resolution === "approve" ? "approved" : "rejected", humanId);
+    return this.listAccessRequests(humanId).find((item) => item.id === requestId)!;
+  }
+
   async sendMessage(
     agentId: string,
     prompt: string,
@@ -1405,7 +1471,14 @@ export class AgentService {
       content: prompt,
       createdAt: timestamp,
     };
-    const runGrants: ResourceGrant[] = uniqueReferencedResources
+    const forwardIntentGrant = this.deriveForwardIntentGrant({
+      database: referenceDatabase,
+      agent,
+      run,
+      message,
+      attachedResources: uniqueReferencedResources,
+    });
+    const attachmentReadGrants: ResourceGrant[] = uniqueReferencedResources
       .filter((resource) => resource.scope === "private")
       .map((resource) => ({
         id: randomUUID(),
@@ -1420,11 +1493,37 @@ export class AgentService {
         revokedAt: null,
         createdAt: timestamp,
       }));
+    const directDisclosureResources = this.explicitSelfDisclosureResources(
+      referenceDatabase,
+      humanId,
+      prompt,
+      uniqueReferencedResources,
+    );
+    const disclosureGrants: ResourceGrant[] = directDisclosureResources.map((resource) => ({
+      id: randomUUID(),
+      resourceId: resource.id,
+      granteeAgentId: agentId,
+      grantedByUserId: humanId,
+      action: "disclose",
+      duration: "run",
+      runId,
+      taskId: null,
+      expiresAt: null,
+      revokedAt: null,
+      createdAt: timestamp,
+    }));
+    const runGrants = [...attachmentReadGrants, ...disclosureGrants];
     const agentAtStart = await this.store.mutate((database) => {
       const storedAgent = database.agents.find((item) => item.id === agentId);
       if (!storedAgent) throw new HttpError(404, "Agent not found");
       if (storedAgent.status === "stopped" || storedAgent.status === "deleted") {
         throw new HttpError(409, "Start the Agent before sending a message");
+      }
+      if (database.runs.some(
+        (existingRun) =>
+          existingRun.agentId === agentId && existingRun.status === "waiting_for_approval",
+      )) {
+        throw new HttpError(409, "Resolve the pending protected-resource approval before starting another Run");
       }
       if (storedAgent.status === "busy") {
         throw new HttpError(409, "This Agent is already running");
@@ -1432,6 +1531,7 @@ export class AgentService {
       database.runs.push(run);
       database.messages.push(message);
       database.grants.push(...runGrants);
+      if (forwardIntentGrant) database.forwardIntentGrants.push(forwardIntentGrant);
       const snapshot = structuredClone(storedAgent);
       storedAgent.status = "busy";
       storedAgent.lastError = null;
@@ -1446,8 +1546,27 @@ export class AgentService {
         targetType: "grant",
         targetId: grant.id,
         decision: "allow",
-        reasonCode: "RESOURCE_ATTACHED_FOR_RUN",
-        detail: "The resource owner attached private knowledge to this Run.",
+        reasonCode: grant.action === "disclose"
+          ? "HUMAN_DISCLOSURE_INTENT_BOUND"
+          : "RESOURCE_ATTACHED_FOR_RUN",
+        detail: grant.action === "disclose"
+          ? "The owner explicitly requested delivery of this exact private resource in the current conversation."
+          : "The resource owner attached private knowledge to this Run.",
+        runId,
+        taskId: null,
+        conversationId: conversation.id,
+      });
+    }
+    if (forwardIntentGrant) {
+      await this.recordDecision({
+        initiatingHumanId: humanId,
+        executingAgentId: agent.id,
+        action: "grant:create",
+        targetType: "grant",
+        targetId: forwardIntentGrant.id,
+        decision: "allow",
+        reasonCode: "HUMAN_FORWARD_INTENT_BOUND",
+        detail: "A human-authored message authorized one exact resource-recipient pair for this Run.",
         runId,
         taskId: null,
         conversationId: conversation.id,
@@ -1463,6 +1582,87 @@ export class AgentService {
       })
       .catch(() => undefined);
     return { run, message };
+  }
+
+  private deriveForwardIntentGrant(input: {
+    database: Database;
+    agent: Agent;
+    run: AgentRun;
+    message: Message;
+    attachedResources: ProtectedResource[];
+  }): ForwardIntentGrant | null {
+    const { database, agent, run, message } = input;
+    const humanId = run.initiatingHumanId;
+    if (!humanId) return null;
+    const prompt = message.content.trim().toLocaleLowerCase();
+    if (!/(转发|发送|发给|交给|分享给|forward|send|share)/iu.test(prompt)) return null;
+
+    const mentioned = (value: string): boolean => {
+      const normalized = value.trim().toLocaleLowerCase();
+      if (!normalized) return false;
+      if (!/^[a-z0-9_.-]+$/iu.test(normalized)) return prompt.includes(normalized);
+      return new RegExp(`(^|[^a-z0-9_.-])${normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9_.-]|$)`, "iu")
+        .test(prompt);
+    };
+    const recipients = database.users.filter(
+      (user) => user.id !== humanId && (mentioned(user.username) || mentioned(user.displayName)),
+    );
+    if (recipients.length !== 1) return null;
+
+    const attachedPrivate = input.attachedResources.filter(
+      (resource) => resource.scope === "private" && resource.ownerUserId === humanId,
+    );
+    const ownTitleMatches = database.resources.filter(
+      (resource) =>
+        resource.scope === "private" &&
+        resource.ownerUserId === humanId &&
+        mentioned(resource.title),
+    );
+    const candidates = attachedPrivate.length === 1
+      ? attachedPrivate
+      : ownTitleMatches;
+    if (candidates.length !== 1) return null;
+
+    const createdAt = message.createdAt;
+    return {
+      id: randomUUID(),
+      initiatingHumanId: humanId,
+      agentId: agent.id,
+      runId: run.id,
+      conversationId: run.conversationId,
+      sourceMessageId: message.id,
+      resourceId: candidates[0]!.id,
+      recipientUserId: recipients[0]!.id,
+      status: "active",
+      expiresAt: new Date(Date.now() + this.config.codexTimeoutMs + 60_000).toISOString(),
+      deliveredMessageId: null,
+      createdAt,
+      consumedAt: null,
+      revokedAt: null,
+    };
+  }
+
+  private explicitSelfDisclosureResources(
+    database: Database,
+    humanId: string,
+    promptValue: string,
+    attachedResources: ProtectedResource[],
+  ): ProtectedResource[] {
+    const prompt = promptValue.trim().toLocaleLowerCase();
+    const requestsRaw = /(原文|全文|逐字|完整(?:内容|展示|显示)|展示给我|显示给我|让我看|verbatim|full\s+text|quote|copy|reveal|show\s+(?:it\s+)?to\s+me)/iu.test(prompt);
+    const targetsSelf = /(给我|向我|让我|展示我的|显示我的|发我|show\s+(?:me|my\b)|to\s+me|reveal\s+my)/iu.test(prompt);
+    if (!requestsRaw || !targetsSelf) return [];
+    const attachedOwn = attachedResources.filter(
+      (resource) => resource.scope === "private" && resource.ownerUserId === humanId,
+    );
+    if (attachedOwn.length === 1) return attachedOwn;
+    const exact = database.resources.filter(
+      (resource) =>
+        resource.scope === "private" &&
+        resource.ownerUserId === humanId &&
+        prompt.includes(resource.title.trim().toLocaleLowerCase()),
+    );
+    return exact.length === 1 ? exact : [];
   }
 
   listResources(humanId: string): ProtectedResource[] {
@@ -1876,7 +2076,10 @@ export class AgentService {
   async discloseResourceForRuntimeByReference(
     token: string,
     reference: { ownerUsername: string; title: string },
-  ): Promise<{ resource: ProtectedResource; decision: AuthorizationDecision }> {
+  ): Promise<
+    | { resource: ProtectedResource; decision: AuthorizationDecision }
+    | { pending: true; accessRequest: AccessRequest }
+  > {
     const credential = this.requireRuntimeCredential(token);
     const resource = this.resolveRuntimeResourceReference(reference);
     if (!resource) throw new HttpError(403, "Access Denied: RESOURCE_REFERENCE_UNAVAILABLE");
@@ -1896,16 +2099,322 @@ export class AgentService {
       );
     } catch (error) {
       if (error instanceof HttpError && error.statusCode === 403) {
+        const pending = await this.createDisclosureAccessRequest(credential, resource);
+        if (pending) return { pending: true, accessRequest: pending };
         throw new HttpError(403, "Access Denied: RESOURCE_DISCLOSURE_DENIED");
       }
       throw error;
     }
   }
 
+  resolveOwnResourceForRuntime(
+    token: string,
+    reference: { ownerUsername: string; query: string },
+  ): {
+    status: "resolved" | "ambiguous";
+    matches: Array<{ title: string; kind: ProtectedResource["kind"]; createdAt: string }>;
+  } {
+    const credential = this.requireRuntimeCredential(token);
+    const database = this.store.snapshot();
+    const owner = database.users.find(
+      (user) => user.username.toLocaleLowerCase() === reference.ownerUsername.trim().toLocaleLowerCase(),
+    );
+    if (!owner || owner.id !== credential.humanId) {
+      throw new HttpError(403, "Access Denied: RESOURCE_REFERENCE_UNAVAILABLE");
+    }
+    const query = reference.query.trim().toLocaleLowerCase();
+    const resources = database.resources.filter(
+      (resource) =>
+        resource.scope === "private" &&
+        resource.ownerUserId === owner.id &&
+        resource.title.toLocaleLowerCase().includes(query),
+    );
+    if (resources.length === 0) {
+      throw new HttpError(403, "Access Denied: RESOURCE_REFERENCE_UNAVAILABLE");
+    }
+    const exact = resources.filter(
+      (resource) => resource.title.trim().toLocaleLowerCase() === query,
+    );
+    const matches = exact.length > 0 ? exact : resources;
+    return {
+      status: matches.length === 1 ? "resolved" : "ambiguous",
+      matches: matches.map((resource) => ({
+        title: resource.title,
+        kind: resource.kind,
+        createdAt: resource.createdAt,
+      })),
+    };
+  }
+
+  async forwardResourceForRuntimeByReference(
+    token: string,
+    reference: { ownerUsername: string; title: string; recipientUsername: string },
+  ): Promise<{
+    receipt: {
+      forwardIntentId: string;
+      resourceTitle: string;
+      recipientUsername: string;
+      deliveredMessageId: string;
+      deliveredAt: string;
+    };
+    policy: Pick<AuthorizationDecision, "decision" | "reasonCode" | "policyVersion">;
+  }> {
+    const credential = this.requireRuntimeCredential(token);
+    const database = this.store.snapshot();
+    const owner = database.users.find(
+      (user) => user.username.toLocaleLowerCase() === reference.ownerUsername.trim().toLocaleLowerCase(),
+    );
+    const recipient = database.users.find(
+      (user) => user.username.toLocaleLowerCase() === reference.recipientUsername.trim().toLocaleLowerCase(),
+    );
+    const title = reference.title.trim().toLocaleLowerCase();
+    const resources = owner
+      ? database.resources.filter(
+          (resource) =>
+            resource.scope === "private" &&
+            resource.ownerUserId === owner.id &&
+            resource.title.trim().toLocaleLowerCase() === title,
+        )
+      : [];
+    if (!owner || !recipient || resources.length !== 1) {
+      throw new HttpError(403, "Access Denied: RESOURCE_FORWARD_DENIED");
+    }
+    const resource = resources[0]!;
+    const agent = database.agents.find((item) => item.id === credential.agentId);
+    if (!agent) throw new HttpError(404, "Agent not found");
+
+    const existing = database.forwardIntentGrants.find((grant) =>
+      grant.runId === credential.runId &&
+      grant.agentId === credential.agentId &&
+      grant.resourceId === resource.id &&
+      grant.recipientUserId === recipient.id &&
+      grant.status === "consumed" &&
+      grant.deliveredMessageId !== null
+    );
+    if (existing?.deliveredMessageId) {
+      const delivered = database.directMessages.find((message) => message.id === existing.deliveredMessageId);
+      if (delivered) {
+        return {
+          receipt: {
+            forwardIntentId: existing.id,
+            resourceTitle: resource.title,
+            recipientUsername: recipient.username,
+            deliveredMessageId: delivered.id,
+            deliveredAt: delivered.createdAt,
+          },
+          policy: {
+            decision: "allow",
+            reasonCode: "USER_INTENT_BOUND_FORWARD",
+            policyVersion: "bouncer-v1",
+          },
+        };
+      }
+    }
+
+    const policy = evaluateResourceForward({
+      humanId: credential.humanId,
+      agent,
+      resource,
+      recipientUserId: recipient.id,
+      memberships: database.memberships,
+      grants: database.grants,
+      intentGrants: database.forwardIntentGrants,
+      runId: credential.runId,
+      ...(credential.taskId ? { taskId: credential.taskId } : {}),
+    });
+    const decision = await this.recordDecision({
+      initiatingHumanId: credential.humanId,
+      executingAgentId: credential.agentId,
+      action: "resource:forward",
+      targetType: "resource",
+      targetId: resource.id,
+      decision: policy.decision,
+      reasonCode: policy.reasonCode,
+      detail: `${policy.detail} Recipient=${recipient.username}.`,
+      runId: credential.runId,
+      taskId: credential.taskId,
+      conversationId: credential.conversationId,
+      requestEvidence: {
+        ...runtimeRequestEvidence("forward", reference),
+        responseStatus: policy.decision === "allow" ? 200 : 403,
+      },
+    });
+    if (policy.decision === "deny") {
+      throw new HttpError(403, "Access Denied: " + policy.reasonCode);
+    }
+
+    const deliveredAt = now();
+    const delivery = await this.store.mutate((next) => {
+      const intent = next.forwardIntentGrants.find((grant) =>
+        grant.runId === credential.runId &&
+        grant.agentId === credential.agentId &&
+        grant.resourceId === resource.id &&
+        grant.recipientUserId === recipient.id &&
+        grant.status === "active"
+      );
+      if (!intent) throw new HttpError(409, "Forward intent has already been consumed");
+      let conversation = next.conversations.find(
+        (item) =>
+          item.kind === "human_dm" &&
+          item.participantUserIds?.includes(credential.humanId) &&
+          item.participantUserIds.includes(recipient.id),
+      );
+      if (!conversation) {
+        conversation = {
+          id: randomUUID(),
+          kind: "human_dm",
+          agentId: null,
+          title: `Chat with ${recipient.displayName}`,
+          ownerUserId: null,
+          groupId: null,
+          projectId: null,
+          createdByUserId: credential.humanId,
+          createdAt: deliveredAt,
+          updatedAt: deliveredAt,
+          participantUserIds: [credential.humanId, recipient.id].sort(),
+        };
+        next.conversations.push(conversation);
+      }
+      const message: HumanDirectMessage = {
+        id: randomUUID(),
+        conversationId: conversation.id,
+        senderUserId: credential.humanId,
+        content: `[由 ${agent.name} 代为转发]\n${resource.title}\n\n${resource.content}`,
+        createdAt: deliveredAt,
+      };
+      next.directMessages.push(message);
+      conversation.updatedAt = deliveredAt;
+      intent.status = "consumed";
+      intent.consumedAt = deliveredAt;
+      intent.deliveredMessageId = message.id;
+      return { intent: structuredClone(intent), message: structuredClone(message) };
+    });
+    return {
+      receipt: {
+        forwardIntentId: delivery.intent.id,
+        resourceTitle: resource.title,
+        recipientUsername: recipient.username,
+        deliveredMessageId: delivery.message.id,
+        deliveredAt: delivery.message.createdAt,
+      },
+      policy: {
+        decision: decision.decision,
+        reasonCode: decision.reasonCode,
+        policyVersion: decision.policyVersion,
+      },
+    };
+  }
+
+  async requestForwardApprovalForRuntime(
+    token: string,
+    reference: { ownerUsername: string; title: string; recipientUsername: string },
+  ): Promise<{ pending: true; accessRequest: AccessRequest }> {
+    const credential = this.requireRuntimeCredential(token);
+    if (!credential.conversationId) throw new HttpError(403, "Forward approval requires a direct conversation");
+    const database = this.store.snapshot();
+    const owner = database.users.find(
+      (user) => user.username.toLocaleLowerCase() === reference.ownerUsername.trim().toLocaleLowerCase(),
+    );
+    const recipient = database.users.find(
+      (user) => user.username.toLocaleLowerCase() === reference.recipientUsername.trim().toLocaleLowerCase(),
+    );
+    const resources = owner
+      ? database.resources.filter(
+          (resource) =>
+            resource.scope === "private" &&
+            resource.ownerUserId === owner.id &&
+            resource.title.trim().toLocaleLowerCase() === reference.title.trim().toLocaleLowerCase(),
+        )
+      : [];
+    const agent = database.agents.find((item) => item.id === credential.agentId);
+    if (!owner || !recipient || resources.length !== 1 || !agent) {
+      throw new HttpError(403, "Access Denied: RESOURCE_FORWARD_DENIED");
+    }
+    const resource = resources[0]!;
+    const policy = evaluateResourceForward({
+      humanId: credential.humanId,
+      agent,
+      resource,
+      recipientUserId: recipient.id,
+      memberships: database.memberships,
+      grants: database.grants,
+      intentGrants: database.forwardIntentGrants,
+      runId: credential.runId,
+    });
+    const decision = await this.recordDecision({
+      initiatingHumanId: credential.humanId,
+      executingAgentId: credential.agentId,
+      action: "resource:forward",
+      targetType: "resource",
+      targetId: resource.id,
+      decision: policy.decision,
+      reasonCode: policy.reasonCode,
+      detail: `${policy.detail} Agent requested human review for recipient=${recipient.username}.`,
+      runId: credential.runId,
+      taskId: credential.taskId,
+      conversationId: credential.conversationId,
+      requestEvidence: {
+        ...runtimeRequestEvidence("forward", reference),
+        command: `node .launchpad/tools/vault.mjs request-forward --owner ${owner.username} --title "[PROTECTED_TITLE]" --recipient ${recipient.username}`,
+        responseStatus: policy.decision === "allow" ? 409 : 403,
+      },
+    });
+    if (policy.reasonCode !== "HUMAN_FORWARD_INTENT_REQUIRED") {
+      throw new HttpError(
+        policy.decision === "allow" ? 409 : 403,
+        policy.decision === "allow"
+          ? "The human already authorized this forward; use forward instead"
+          : "Access Denied: " + policy.reasonCode,
+      );
+    }
+    const existing = this.store.snapshot().accessRequests.find((request) =>
+      request.runId === credential.runId &&
+      request.resourceId === resource.id &&
+      request.recipientUserId === recipient.id &&
+      request.action === "forward" &&
+      request.status === "pending"
+    );
+    if (existing) return { pending: true, accessRequest: existing };
+    const requestedAt = now();
+    const request: AccessRequest = {
+      id: randomUUID(),
+      requesterHumanId: credential.humanId,
+      ownerUserId: resource.ownerUserId!,
+      agentId: credential.agentId,
+      resourceId: resource.id,
+      action: "forward",
+      recipientUserId: recipient.id,
+      runId: credential.runId,
+      conversationId: credential.conversationId,
+      status: "pending",
+      sourceDecisionId: decision.id,
+      requestedAt,
+      expiresAt: new Date(Date.now() + this.config.approvalTimeoutMs).toISOString(),
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+    await this.store.mutate((next) => next.accessRequests.push(request));
+    await this.recordDecision({
+      initiatingHumanId: credential.humanId,
+      executingAgentId: credential.agentId,
+      runId: credential.runId,
+      taskId: null,
+      conversationId: credential.conversationId,
+      action: "approval:request",
+      targetType: "access_request",
+      targetId: request.id,
+      decision: "allow",
+      reasonCode: "HUMAN_FORWARD_APPROVAL_REQUIRED",
+      detail: "The Run is paused until the resource owner reviews this exact recipient-bound forward.",
+    });
+    this.scheduleApprovalTimeout(request);
+    return { pending: true, accessRequest: request };
+  }
+
   async requestOwnerDisclosureForRuntime(
     token: string,
     reference: { ownerUsername: string },
-  ): Promise<never> {
+  ): Promise<{ pending: true; accessRequest: AccessRequest }> {
     const credential = this.requireRuntimeCredential(token);
     const database = this.store.snapshot();
     const agent = database.agents.find((item) => item.id === credential.agentId);
@@ -1921,16 +2430,17 @@ export class AgentService {
           )
         : owner.id === credential.humanId
       : false;
-    const resource = ownerIsVisible
-      ? database.resources.find(
+    const resources = ownerIsVisible
+      ? database.resources.filter(
           (item) => item.scope === "private" && item.ownerUserId === owner!.id,
         )
-      : null;
-    if (!owner || !resource || credential.humanId === owner.id) {
+      : [];
+    if (!owner || resources.length !== 1) {
       throw new HttpError(403, "Access Denied: RESOURCE_DISCLOSURE_DENIED");
     }
+    const resource = resources[0]!;
     try {
-      await this.discloseResourceAsAgent(
+      const disclosed = await this.discloseResourceAsAgent(
         credential.humanId,
         credential.agentId,
         resource.id,
@@ -1943,13 +2453,148 @@ export class AgentService {
           requestEvidence: runtimeRequestEvidence("disclose", reference),
         },
       );
+      // A title-less request is only a discovery-safe approval entry point. If an
+      // existing grant already allows disclosure, require an exact title instead.
+      void disclosed;
     } catch (error) {
       if (error instanceof HttpError && error.statusCode === 403) {
+        const pending = await this.createDisclosureAccessRequest(credential, resource);
+        if (pending) return { pending: true, accessRequest: pending };
         throw new HttpError(403, "Access Denied: RESOURCE_DISCLOSURE_DENIED");
       }
       throw error;
     }
-    throw new HttpError(403, "Access Denied: RESOURCE_DISCLOSURE_DENIED");
+    throw new HttpError(409, "Use the exact resource title after disclosure has been approved");
+  }
+
+  private async createDisclosureAccessRequest(
+    credential: {
+      agentId: string;
+      humanId: string;
+      runId: string;
+      conversationId: string | null;
+    },
+    resource: ProtectedResource,
+  ): Promise<AccessRequest | null> {
+    if (
+      resource.scope !== "private" ||
+      !resource.ownerUserId ||
+      resource.ownerUserId !== credential.humanId ||
+      !credential.conversationId
+    ) return null;
+    const database = this.store.snapshot();
+    const sourceDecision = database.authorizationDecisions
+      .filter((decision) =>
+        decision.runId === credential.runId &&
+        decision.executingAgentId === credential.agentId &&
+        decision.targetId === resource.id &&
+        decision.action === "resource:disclose" &&
+        decision.decision === "deny" &&
+        decision.reasonCode === "PRIVATE_GRANT_REQUIRED"
+      )
+      .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0];
+    if (!sourceDecision) return null;
+    const existing = database.accessRequests.find((request) =>
+      request.runId === credential.runId &&
+      request.resourceId === resource.id &&
+      request.action === "disclose" &&
+      request.status === "pending"
+    );
+    if (existing) return existing;
+    const requestedAt = now();
+    const request: AccessRequest = {
+      id: randomUUID(),
+      requesterHumanId: credential.humanId,
+      ownerUserId: resource.ownerUserId,
+      agentId: credential.agentId,
+      resourceId: resource.id,
+      action: "disclose",
+      recipientUserId: credential.humanId,
+      runId: credential.runId,
+      conversationId: credential.conversationId,
+      status: "pending",
+      sourceDecisionId: sourceDecision.id,
+      requestedAt,
+      expiresAt: new Date(Date.now() + this.config.approvalTimeoutMs).toISOString(),
+      resolvedAt: null,
+      resolvedByUserId: null,
+    };
+    await this.store.mutate((next) => next.accessRequests.push(request));
+    await this.recordDecision({
+      initiatingHumanId: credential.humanId,
+      executingAgentId: credential.agentId,
+      runId: credential.runId,
+      taskId: null,
+      conversationId: credential.conversationId,
+      action: "approval:request",
+      targetType: "access_request",
+      targetId: request.id,
+      decision: "allow",
+      reasonCode: "HUMAN_APPROVAL_REQUIRED",
+      detail: "The Run is paused until the resource owner approves, rejects, or the request expires.",
+    });
+    this.scheduleApprovalTimeout(request);
+    return request;
+  }
+
+  private directDisclosureIntentTarget(
+    humanId: string,
+    prompt: string,
+  ): ProtectedResource | null {
+    const normalizedPrompt = prompt.trim().toLocaleLowerCase();
+    const requestsRawDisclosure =
+      /(原文|全文|逐字|披露|完整(?:内容|展示|显示)|发给我|转发给我|展示给我|显示给我|让我看|verbatim|full\s+text|quote|copy|reveal|disclose|send\s+(?:it\s+)?to\s+me|show\s+(?:it\s+)?to\s+me)/iu
+        .test(normalizedPrompt);
+    const targetsCurrentHuman =
+      /(给我|向我|让我|展示我的|显示我的|发我|转发给我|show\s+(?:me|my\b)|send\s+me|to\s+me|reveal\s+my)/iu
+        .test(normalizedPrompt);
+    if (!requestsRawDisclosure || !targetsCurrentHuman) return null;
+
+    const database = this.store.snapshot();
+    const candidates = database.resources.filter(
+      (resource) => resource.scope === "private" && resource.ownerUserId === humanId,
+    );
+    const exactTitleMatches = candidates.filter((resource) =>
+      normalizedPrompt.includes(resource.title.trim().toLocaleLowerCase()),
+    );
+    if (exactTitleMatches.length === 1) return exactTitleMatches[0]!;
+    return null;
+  }
+
+  private async enforceDirectDisclosureIntent(
+    credential: {
+      agentId: string;
+      humanId: string;
+      runId: string;
+      conversationId: string | null;
+    },
+    prompt: string,
+  ): Promise<AccessRequest | null> {
+    const resource = this.directDisclosureIntentTarget(credential.humanId, prompt);
+    if (!resource || !credential.conversationId) return null;
+    try {
+      await this.discloseResourceAsAgent(
+        credential.humanId,
+        credential.agentId,
+        resource.id,
+        {
+          runId: credential.runId,
+          conversationId: credential.conversationId,
+          requestEvidence: {
+            source: "control_plane",
+            method: "POST",
+            path: `/api/agents/${credential.agentId}/messages`,
+            command: null,
+            body: { content: "[REDACTED_DISCLOSURE_INTENT]" },
+            redacted: true,
+          },
+        },
+      );
+      return null;
+    } catch (error) {
+      if (!(error instanceof HttpError) || error.statusCode !== 403) throw error;
+      return this.createDisclosureAccessRequest(credential, resource);
+    }
   }
 
   private resolveRuntimeResourceReference(
@@ -2433,11 +3078,16 @@ export class AgentService {
         const grant = decision.targetType === "grant"
           ? database.grants.find((item) => item.id === decision.targetId)
           : null;
+        const accessRequest = decision.targetType === "access_request"
+          ? database.accessRequests.find((item) => item.id === decision.targetId)
+          : null;
         const resource = decision.targetType === "resource"
           ? database.resources.find((item) => item.id === decision.targetId)
           : grant
             ? database.resources.find((item) => item.id === grant.resourceId)
-            : null;
+            : accessRequest
+              ? database.resources.find((item) => item.id === accessRequest.resourceId)
+              : null;
         const resourceOwner = resource?.ownerUserId
           ? database.users.find((item) => item.id === resource.ownerUserId)
           : null;
@@ -2504,6 +3154,172 @@ export class AgentService {
     return decision;
   }
 
+  private scheduleApprovalTimeout(request: AccessRequest): void {
+    const existing = this.approvalTimers.get(request.id);
+    if (existing) clearTimeout(existing);
+    const delay = Math.max(0, new Date(request.expiresAt).getTime() - Date.now());
+    const timer = setTimeout(() => {
+      this.approvalTimers.delete(request.id);
+      const latest = this.store.snapshot().accessRequests.find((item) => item.id === request.id);
+      if (!latest || latest.status !== "pending") return;
+      void this.finishAccessRequest(latest, "expired", null).catch(() => undefined);
+    }, Math.min(delay, 2_147_483_647));
+    timer.unref();
+    this.approvalTimers.set(request.id, timer);
+  }
+
+  private async finishAccessRequest(
+    request: AccessRequest,
+    status: "approved" | "rejected" | "expired",
+    resolvedByUserId: string | null,
+  ): Promise<void> {
+    const timestamp = now();
+    const updated = await this.store.mutate((database) => {
+      const stored = database.accessRequests.find((item) => item.id === request.id);
+      if (!stored || stored.status !== "pending") return null;
+      stored.status = status;
+      stored.resolvedAt = timestamp;
+      stored.resolvedByUserId = resolvedByUserId;
+      if (status === "approved" && stored.action === "disclose") {
+        const duplicate = database.grants.some((grant) =>
+          grant.resourceId === stored.resourceId &&
+          grant.granteeAgentId === stored.agentId &&
+          grant.action === "disclose" &&
+          grant.duration === "run" &&
+          grant.runId === stored.runId &&
+          grant.revokedAt === null
+        );
+        if (!duplicate) {
+          database.grants.push({
+            id: randomUUID(),
+            resourceId: stored.resourceId,
+            granteeAgentId: stored.agentId,
+            grantedByUserId: stored.ownerUserId,
+            action: "disclose",
+            duration: "run",
+            runId: stored.runId,
+            taskId: null,
+            expiresAt: null,
+            revokedAt: null,
+            createdAt: timestamp,
+          });
+        }
+      } else if (status === "approved" && stored.action === "forward") {
+        const sourceMessage = database.messages.find(
+          (message) => message.runId === stored.runId && message.role === "user",
+        );
+        if (!sourceMessage) throw new Error("Forward approval has no source human message");
+        const duplicate = database.forwardIntentGrants.some((intent) =>
+          intent.runId === stored.runId &&
+          intent.resourceId === stored.resourceId &&
+          intent.recipientUserId === stored.recipientUserId &&
+          intent.status === "active"
+        );
+        if (!duplicate) {
+          database.forwardIntentGrants.push({
+            id: randomUUID(),
+            initiatingHumanId: stored.requesterHumanId,
+            agentId: stored.agentId,
+            runId: stored.runId,
+            conversationId: stored.conversationId,
+            sourceMessageId: sourceMessage.id,
+            resourceId: stored.resourceId,
+            recipientUserId: stored.recipientUserId,
+            status: "active",
+            expiresAt: new Date(Date.now() + this.config.codexTimeoutMs + 60_000).toISOString(),
+            deliveredMessageId: null,
+            createdAt: timestamp,
+            consumedAt: null,
+            revokedAt: null,
+          });
+        }
+      }
+      return structuredClone(stored);
+    });
+    if (!updated) return;
+    const timer = this.approvalTimers.get(updated.id);
+    if (timer) clearTimeout(timer);
+    this.approvalTimers.delete(updated.id);
+    await this.recordDecision({
+      initiatingHumanId: updated.requesterHumanId,
+      executingAgentId: updated.agentId,
+      runId: updated.runId,
+      taskId: null,
+      conversationId: updated.conversationId,
+      action: status === "approved"
+        ? "approval:approve"
+        : status === "rejected"
+          ? "approval:reject"
+          : "approval:expire",
+      targetType: "access_request",
+      targetId: updated.id,
+      decision: status === "approved" ? "allow" : "deny",
+      reasonCode: status === "approved"
+        ? "RESOURCE_OWNER_APPROVED"
+        : status === "rejected"
+          ? "RESOURCE_OWNER_REJECTED"
+          : "APPROVAL_TIMEOUT_DENIED",
+      detail: status === "approved"
+        ? `The resource owner approved ${request.action} for this Run only.`
+        : status === "rejected"
+          ? `The resource owner rejected ${request.action}.`
+          : `The approval deadline passed, so ${request.action} was denied by default.`,
+    });
+    this.queueAccessRequestResume(updated);
+  }
+
+  private queueAccessRequestResume(request: AccessRequest): void {
+    void (async () => {
+      const prior = this.activeExecutions.get(request.agentId);
+      if (prior) await prior.catch(() => undefined);
+      const database = this.store.snapshot();
+      const run = database.runs.find((item) => item.id === request.runId);
+      const agent = database.agents.find((item) => item.id === request.agentId);
+      const resource = database.resources.find((item) => item.id === request.resourceId);
+      const owner = database.users.find((item) => item.id === request.ownerUserId);
+      const recipient = database.users.find((item) => item.id === request.recipientUserId);
+      if (!run || !agent || !resource || !owner || !recipient) return;
+      if (["completed", "failed", "cancelled"].includes(run.status)) return;
+      if (agent.status === "stopped" || agent.status === "deleted") {
+        await this.store.mutate((next) => {
+          const storedRun = next.runs.find((item) => item.id === request.runId);
+          if (!storedRun || storedRun.status !== "waiting_for_approval") return;
+          storedRun.status = "cancelled";
+          storedRun.error = "Agent was stopped before approval could resume the Run";
+          storedRun.completedAt = now();
+        });
+        return;
+      }
+      const resumePrompt = request.status === "approved"
+        ? request.action === "forward" ? [
+            "[Launchpad control-plane resume]",
+            "The resource owner approved the exact recipient-bound forward for this Run only.",
+            `Retry exactly: node .launchpad/tools/vault.mjs forward --owner ${owner.username} --title ${JSON.stringify(resource.title)} --recipient ${recipient.username}`,
+            "Use only the delivery receipt. Never reproduce the protected body in Agent output.",
+          ].join("\n") : [
+            "[Launchpad control-plane resume]",
+            "The resource owner approved the pending disclosure for this Run only.",
+            `Retry exactly: node .launchpad/tools/vault.mjs disclose --owner ${owner.username} --title ${JSON.stringify(resource.title)}`,
+            "Use only the returned backend result. Then answer the original user request.",
+          ].join("\n")
+        : [
+            "[Launchpad control-plane resume]",
+            request.status === "expired"
+              ? `The ${request.action} request expired and was automatically denied.`
+              : `The resource owner rejected the ${request.action} request.`,
+            "Do not retry the protected-data request or reconstruct any source content.",
+            `Briefly tell the user that ${request.action} was not approved.`,
+          ].join("\n");
+      const execution = this.executeRun(agent, run, resumePrompt, true);
+      this.activeExecutions.set(agent.id, execution);
+      void execution.finally(() => {
+        if (this.activeExecutions.get(agent.id) === execution) {
+          this.activeExecutions.delete(agent.id);
+        }
+      }).catch(() => undefined);
+    })().catch(() => undefined);
+  }
+
   private async revokeTaskGrants(
     taskId: string,
     humanId: string,
@@ -2538,12 +3354,57 @@ export class AgentService {
     }
   }
 
+  private async cancelWaitingApprovalRuns(agentId: string, humanId: string): Promise<void> {
+    const timestamp = now();
+    const cancelledRequests = await this.store.mutate((database) => {
+      const waitingRunIds = new Set(
+        database.runs
+          .filter((run) => run.agentId === agentId && run.status === "waiting_for_approval")
+          .map((run) => run.id),
+      );
+      if (waitingRunIds.size === 0) return [] as AccessRequest[];
+      for (const run of database.runs) {
+        if (!waitingRunIds.has(run.id)) continue;
+        run.status = "cancelled";
+        run.error = "Agent was stopped while waiting for protected-resource approval";
+        run.completedAt = timestamp;
+      }
+      const requests = database.accessRequests.filter(
+        (request) => waitingRunIds.has(request.runId) && request.status === "pending",
+      );
+      for (const request of requests) {
+        request.status = "rejected";
+        request.resolvedAt = timestamp;
+        request.resolvedByUserId = humanId;
+      }
+      return structuredClone(requests);
+    });
+    for (const request of cancelledRequests) {
+      const timer = this.approvalTimers.get(request.id);
+      if (timer) clearTimeout(timer);
+      this.approvalTimers.delete(request.id);
+      await this.recordDecision({
+        initiatingHumanId: request.requesterHumanId,
+        executingAgentId: request.agentId,
+        runId: request.runId,
+        taskId: null,
+        conversationId: request.conversationId,
+        action: "approval:reject",
+        targetType: "access_request",
+        targetId: request.id,
+        decision: "deny",
+        reasonCode: "AGENT_STOPPED",
+        detail: "The Agent was stopped while the protected-resource request was waiting for approval.",
+      });
+    }
+  }
+
   private async revokeRunGrants(
     runId: string,
     humanId: string,
     conversationId: string,
   ): Promise<void> {
-    const revoked = await this.store.mutate((database) => {
+    const { revoked, revokedIntents } = await this.store.mutate((database) => {
       const timestamp = now();
       const grants = database.grants.filter(
         (grant) =>
@@ -2552,7 +3413,14 @@ export class AgentService {
           grant.revokedAt === null,
       );
       for (const grant of grants) grant.revokedAt = timestamp;
-      return structuredClone(grants);
+      const intents = database.forwardIntentGrants.filter(
+        (intent) => intent.runId === runId && intent.status === "active" && intent.revokedAt === null,
+      );
+      for (const intent of intents) {
+        intent.status = "revoked";
+        intent.revokedAt = timestamp;
+      }
+      return { revoked: structuredClone(grants), revokedIntents: structuredClone(intents) };
     });
     for (const grant of revoked) {
       await this.recordDecision({
@@ -2567,6 +3435,21 @@ export class AgentService {
         decision: "allow",
         reasonCode: "RUN_SCOPE_ENDED",
         detail: "The Run ended, so its temporary resource grant was revoked.",
+      });
+    }
+    for (const intent of revokedIntents) {
+      await this.recordDecision({
+        initiatingHumanId: humanId,
+        executingAgentId: intent.agentId,
+        runId,
+        taskId: null,
+        conversationId,
+        action: "grant:revoke",
+        targetType: "grant",
+        targetId: intent.id,
+        decision: "allow",
+        reasonCode: "RUN_SCOPE_ENDED",
+        detail: "The Run ended, so its unconsumed forward intent was revoked.",
       });
     }
   }
@@ -3319,7 +4202,11 @@ export class AgentService {
       "The protected vault list contains only resources readable by this Run. A missing item never proves that another user has no private knowledge. For group Agents, use only the authenticated hasPrivateKnowledge flag to answer whether private knowledge exists; never reveal or estimate quantity, titles, kinds, ids, or contents.",
       "If the human asks for a named knowledge resource, you MUST call the protected vault tool with its owner username and exact title. Do not claim that access succeeded or failed until the tool returns; do not ask the human for an internal resource id; never guess contents when access is denied.",
       "For a launch-risk yes/no assessment, use `vault.mjs assess`; it returns only an aggregate result from sealed backend processing.",
-      "If the human asks to quote, copy, forward, summarize in detail, or reveal private source text, use `vault.mjs disclose`. Processing access is not disclosure access, and you must relay a backend denial without reconstructing the source.",
+      "If the human asks to quote, copy, summarize in detail, or reveal private source text in the current Agent conversation, use `vault.mjs disclose`. Processing access is not disclosure access, and you must relay a backend denial without reconstructing the source.",
+      "If the human explicitly asks to send one exact resource to a named registered human, use `vault.mjs forward --owner <username> --title \"<exact title>\" --recipient <username>`. Forwarding is a separate external action; never substitute read or disclose for it.",
+      "If you independently propose forwarding the initiating human's own resource, use `vault.mjs request-forward` with exact owner, title, and recipient. This creates an in-conversation approval and pauses the Run; never present prose as if approval happened.",
+      "If an own-resource title is partial, use `vault.mjs resolve --owner <current username> --query \"<query>\"`; if it is ambiguous, ask the human to choose. Never list or resolve another person's private titles.",
+      "A request to forward another owner's private data must still reach the forward tool when exact owner, title, and recipient are known so the Bouncer denial is auditable. Never request approval from the recipient for somebody else's resource.",
       "A request for another person's private资料、全部资料、所有资料, or similar private information without an exact title still REQUIRES a real backend call: `node .launchpad/tools/vault.mjs disclose --owner <username>`. Never answer such a request with a prose-only refusal; the backend decision is mandatory evidence.",
     ].join("\n");
   }
@@ -4067,12 +4954,19 @@ export class AgentService {
     }
   }
 
-  private async executeRun(agentAtStart: Agent, run: AgentRun): Promise<void> {
+  private async executeRun(
+    agentAtStart: Agent,
+    run: AgentRun,
+    promptOverride?: string,
+    approvalResume = false,
+  ): Promise<void> {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
       if (storedRun) {
         storedRun.status = "running";
-        storedRun.startedAt = now();
+        storedRun.startedAt ??= now();
+        storedRun.completedAt = null;
+        storedRun.error = null;
       }
     });
     if (!run.initiatingHumanId) {
@@ -4105,7 +4999,7 @@ export class AgentService {
       const result = await this.runner.run({
         agentId: agentAtStart.id,
         workspacePath: runtimePath,
-        prompt: this.directRunPrompt(agentAtStart, run.prompt, run.conversationId, run.id),
+        prompt: promptOverride ?? this.directRunPrompt(agentAtStart, run.prompt, run.conversationId, run.id),
         threadId: agentSession.codexThreadId,
         runtimeEnvironment: {
           LAUNCHPAD_CONTROL_PLANE_URL: this.config.runtimeControlPlaneUrl,
@@ -4116,6 +5010,45 @@ export class AgentService {
           LAUNCHPAD_INITIATING_HUMAN_ID: run.initiatingHumanId,
         },
       });
+      let accessRequest = !approvalResume
+        ? this.store.snapshot().accessRequests.find((item) => item.runId === run.id)
+        : null;
+      if (!approvalResume && !accessRequest) {
+        accessRequest = await this.enforceDirectDisclosureIntent(
+          {
+            agentId: agentAtStart.id,
+            humanId: run.initiatingHumanId,
+            runId: run.id,
+            conversationId: run.conversationId,
+          },
+          run.prompt,
+        );
+      }
+      if (accessRequest) {
+        const waitingAt = now();
+        await this.store.mutate((database) => {
+          const storedRun = database.runs.find((item) => item.id === run.id);
+          const agent = database.agents.find((item) => item.id === agentAtStart.id);
+          const session = database.agentSessions.find(
+            (item) => item.agentId === agentAtStart.id && item.conversationId === run.conversationId,
+          );
+          if (!storedRun || !agent) return;
+          storedRun.status = "waiting_for_approval";
+          storedRun.runtimeToolEvents = [
+            ...(storedRun.runtimeToolEvents ?? []),
+            ...(result.toolEvents ?? []),
+          ];
+          storedRun.middlewareEvidenceStatus = "pending";
+          agent.status = "busy";
+          agent.lastError = null;
+          agent.updatedAt = waitingAt;
+          if (session) {
+            session.codexThreadId = result.threadId;
+            session.updatedAt = waitingAt;
+          }
+        });
+        return;
+      }
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
@@ -4127,7 +5060,10 @@ export class AgentService {
         storedRun.status = "completed";
         storedRun.output = result.output;
         storedRun.usage = result.usage;
-        storedRun.runtimeToolEvents = structuredClone(result.toolEvents ?? []);
+        storedRun.runtimeToolEvents = [
+          ...(storedRun.runtimeToolEvents ?? []),
+          ...(result.toolEvents ?? []),
+        ];
         storedRun.middlewareEvidenceStatus = "not_required";
         storedRun.completedAt = completedAt;
         database.messages.push({
@@ -4168,7 +5104,10 @@ export class AgentService {
       });
     } finally {
       this.runtimeCredentials.delete(runtimeTokenHash);
-      await this.revokeRunGrants(run.id, run.initiatingHumanId, run.conversationId);
+      const latestStatus = this.store.snapshot().runs.find((item) => item.id === run.id)?.status;
+      if (latestStatus && ["completed", "failed", "cancelled"].includes(latestStatus)) {
+        await this.revokeRunGrants(run.id, run.initiatingHumanId, run.conversationId);
+      }
     }
   }
 

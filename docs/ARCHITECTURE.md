@@ -2,8 +2,9 @@
 
 This submission adds one middleware story to the Starter Kit: a trusted Bouncer
 boundary that separates the initiating human from the executing Agent and
-authorizes protected resource reads. Browser state, prompts, model output, and
-Runtime files are never authorization sources.
+authorizes protected reads and recipient-bound external transfers. Browser
+state, Agent output, protected content, and Runtime files are never human-intent
+authorization sources.
 
 ```mermaid
 flowchart LR
@@ -20,7 +21,7 @@ flowchart LR
         Service -->|"human + Agent + Run + scoped grant"| Policy["Bouncer policy enforcement point"]
         Policy --> Vault["Protected resource service"]
         Policy --> Audit["Authorization decision store"]
-        Store[("JSON state\nusers · Agents · grants · Runs")]
+        Store[("JSON state\nusers · Agents · grants · intent · Runs")]
         Service <--> Store
         Policy <--> Store
     end
@@ -32,9 +33,10 @@ flowchart LR
 
     UI -->|"HttpOnly session + intent"| API
     Service -->|"short-lived Run-bound credential"| Runner
-    Tool -->|"credential + owner/title reference"| API
+    Tool -->|"credential + owner/title/recipient"| API
     Policy -->|"allow: content"| Tool
     Policy -->|"deny: safe generic error"| Tool
+    Policy -->|"allow forward: control-plane delivery"| Delivery["Human direct message"]
     Audit --> API --> Evidence
     Runner --> Model["Ark / compatible model"]
 ```
@@ -68,14 +70,31 @@ Specific denial reasons are persisted for audit, while inaccessible and
 nonexistent resource references produce the same Runtime response so private
 titles cannot be confirmed by probing.
 
+### Read is not forward
+
+Attaching an owned resource creates a Run-scoped `read` grant, so useful context
+does not require a duplicate confirmation. An external `forward` is evaluated
+separately. The trusted control plane derives a capability only from the current
+human-authored message and binds it to `(human, Agent, Run, resource,
+recipient)`. The backend delivers the body directly and returns only a receipt
+to Runtime.
+
+An unbound direct forward returns `HUMAN_FORWARD_INTENT_REQUIRED`. An Agent may
+instead submit `request-forward`, which pauses the Run and presents an owner
+approval in the main conversation. Approval resumes with a fresh Runtime
+credential; rejection and timeout resume without delivery. If Bob owns the
+resource while Alice initiates the Run, `CROSS_OWNER_FORWARD_DENIED` is returned
+before an approval can be created—Alice cannot approve Bob's data.
+
 ### Processing is not disclosure
 
 Task-scoped grants to group Agents are purpose-limited `process` grants. The
 protected processor may inspect the resource inside the Bouncer boundary and
 return a fixed aggregate (`risk_signals_present` or
 `no_risk_signals_found`), but it never returns source text to the user-facing
-Runtime. A request to quote, copy, summarize in detail, or forward the source
-must use the separate disclosure action. Disclosure is authorized against the
+Runtime. A request to quote, copy, or summarize the source in the current
+conversation must use the separate disclosure action. External forwarding uses
+the recipient-bound action above. Disclosure is authorized against the
 initiating human as the recipient, so a task initiated by Alice can process a
 Bob-owned resource with Bob's grant while still denying disclosure to Alice.
 

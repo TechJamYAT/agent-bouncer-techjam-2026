@@ -1,4 +1,5 @@
 import type {
+  AccessRequest,
   Agent,
   AgentRun,
   ArtifactPublication,
@@ -286,6 +287,16 @@ export const api = {
     request<{ grant: ResourceGrant }>(`/api/grants/${grantId}`, { method: "DELETE" }),
   decisions: () =>
     request<{ decisions: AuthorizationDecision[] }>("/api/authorization-decisions"),
+  accessRequests: () =>
+    request<{ accessRequests: AccessRequest[] }>("/api/access-requests"),
+  approveAccessRequest: (id: string) =>
+    request<{ accessRequest: AccessRequest }>(`/api/access-requests/${id}/approve`, {
+      method: "POST",
+    }),
+  rejectAccessRequest: (id: string) =>
+    request<{ accessRequest: AccessRequest }>(`/api/access-requests/${id}/reject`, {
+      method: "POST",
+    }),
   artifactPublications: () =>
     request<{ publications: ArtifactPublication[] }>("/api/artifact-publications"),
   approveArtifactPublication: (id: string) =>

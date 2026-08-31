@@ -1,4 +1,4 @@
-import type { Group, GroupMembership, ProtectedResource, User } from "./types.js";
+import type { Agent, Group, GroupMembership, ProtectedResource, User } from "./types.js";
 
 export const DEMO_USER_IDS = {
   alice: "00000000-0000-4000-8000-000000000001",
@@ -11,6 +11,10 @@ export const DEMO_USER_IDS = {
 export const DEMO_GROUP_IDS = {
   alpha: "10000000-0000-4000-8000-000000000001",
   beta: "10000000-0000-4000-8000-000000000002",
+} as const;
+
+export const DEMO_AGENT_IDS = {
+  case: "30000000-0000-4000-8000-000000000001",
 } as const;
 
 export const DEMO_RESOURCE_IDS = {
@@ -61,6 +65,32 @@ export function demoMemberships(): GroupMembership[] {
     { groupId: DEMO_GROUP_IDS.alpha, userId: DEMO_USER_IDS.carol, role: "member", createdAt: SEEDED_AT },
     { groupId: DEMO_GROUP_IDS.beta, userId: DEMO_USER_IDS.bob, role: "owner", createdAt: SEEDED_AT },
     { groupId: DEMO_GROUP_IDS.beta, userId: DEMO_USER_IDS.david, role: "member", createdAt: SEEDED_AT },
+  ];
+}
+
+export function demoAgents(): Agent[] {
+  return [
+    {
+      id: DEMO_AGENT_IDS.case,
+      name: "Case",
+      role: "Launch Risk Reviewer",
+      description: "Reviews protected launch notes through Bouncer sealed processing.",
+      instructions: [
+        "For protected resources, follow the workspace vault instructions exactly.",
+        "Use sealed assess for analysis and disclose only when the task asks to share source text.",
+        "Never invent policy results or reveal protected content from memory.",
+      ].join(" "),
+      color: "#6d5efc",
+      scope: "group",
+      ownerUserId: null,
+      groupId: DEMO_GROUP_IDS.alpha,
+      createdByUserId: DEMO_USER_IDS.alice,
+      systemManaged: false,
+      status: "ready",
+      lastError: null,
+      createdAt: SEEDED_AT,
+      updatedAt: SEEDED_AT,
+    },
   ];
 }
 

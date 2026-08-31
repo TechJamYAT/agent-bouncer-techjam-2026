@@ -4,13 +4,15 @@ export type WorkspaceOwnerType = "personal" | "group";
 export type ProjectStatus = "active" | "archived";
 export type ConversationKind = "agent_dm" | "human_dm" | "group_chat" | "task";
 export type ArtifactPublicationStatus = "pending" | "approving" | "approved" | "rejected";
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type RunStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 export type MessageRole = "user" | "assistant";
 export type GroupRole = "owner" | "admin" | "member";
 export type ResourceScope = "private" | "group";
 export type ResourceKind = "document" | "message" | "task_artifact";
 export type GrantDuration = "persistent" | "run" | "task";
-export type ResourceGrantAction = "read" | "process";
+export type ResourceGrantAction = "read" | "process" | "disclose";
+export type IntentGrantStatus = "active" | "consumed" | "revoked";
+export type AccessRequestStatus = "pending" | "approved" | "rejected" | "expired";
 export type AuthorizationAction =
   | "agent:create"
   | "agent:use"
@@ -20,18 +22,24 @@ export type AuthorizationAction =
   | "resource:read"
   | "resource:process"
   | "resource:disclose"
+  | "resource:forward"
   | "resource:publish"
   | "artifact:propose"
   | "artifact:approve"
   | "artifact:reject"
   | "shared_file:read"
   | "grant:create"
-  | "grant:revoke";
+  | "grant:revoke"
+  | "approval:request"
+  | "approval:approve"
+  | "approval:reject"
+  | "approval:expire";
 export type AuthorizationDecisionValue = "allow" | "deny";
 export type MiddlewareEvidenceAction =
   | "resource:read"
   | "resource:process"
-  | "resource:disclose";
+  | "resource:disclose"
+  | "resource:forward";
 export type MiddlewareEvidenceStatus =
   | "not_required"
   | "pending"
@@ -45,7 +53,7 @@ export interface MiddlewareEvidenceRequirement {
 
 export interface RuntimeToolEvent {
   tool: "vault";
-  operation: "list" | "read" | "assess" | "disclose";
+  operation: "list" | "read" | "assess" | "disclose" | "resolve" | "forward" | "request-forward";
   status: "completed" | "failed";
   exitCode: number | null;
   occurredAt: string;
@@ -301,6 +309,46 @@ export interface ResourceGrant {
   createdAt: string;
 }
 
+/**
+ * A capability derived only from a human-authored message at the trusted
+ * control-plane boundary. Agent output and protected resource contents cannot
+ * create one of these grants.
+ */
+export interface ForwardIntentGrant {
+  id: string;
+  initiatingHumanId: string;
+  agentId: string;
+  runId: string;
+  conversationId: string;
+  sourceMessageId: string;
+  resourceId: string;
+  recipientUserId: string;
+  status: IntentGrantStatus;
+  expiresAt: string;
+  deliveredMessageId: string | null;
+  createdAt: string;
+  consumedAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface AccessRequest {
+  id: string;
+  requesterHumanId: string;
+  ownerUserId: string;
+  agentId: string;
+  resourceId: string;
+  action: "disclose" | "forward";
+  recipientUserId: string;
+  runId: string;
+  conversationId: string;
+  status: AccessRequestStatus;
+  sourceDecisionId: string;
+  requestedAt: string;
+  expiresAt: string;
+  resolvedAt: string | null;
+  resolvedByUserId: string | null;
+}
+
 export interface AuthorizationDecision {
   id: string;
   occurredAt: string;
@@ -310,7 +358,7 @@ export interface AuthorizationDecision {
   taskId: string | null;
   conversationId: string | null;
   action: AuthorizationAction;
-  targetType: "agent" | "group" | "member" | "resource" | "grant" | "publication" | "shared_file";
+  targetType: "agent" | "group" | "member" | "resource" | "grant" | "publication" | "shared_file" | "access_request";
   targetId: string;
   decision: AuthorizationDecisionValue;
   reasonCode: string;
@@ -437,7 +485,7 @@ export interface CoordinationEvent {
 }
 
 export interface Database {
-  version: 5;
+  version: 7;
   users: User[];
   sessions: Session[];
   groups: Group[];
@@ -454,6 +502,8 @@ export interface Database {
   runs: AgentRun[];
   resources: ProtectedResource[];
   grants: ResourceGrant[];
+  forwardIntentGrants: ForwardIntentGrant[];
+  accessRequests: AccessRequest[];
   authorizationDecisions: AuthorizationDecision[];
   coordinationSessions: CoordinationSession[];
   coordinationSteps: CoordinationStep[];

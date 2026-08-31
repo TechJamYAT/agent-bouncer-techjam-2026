@@ -1182,6 +1182,7 @@ select:focus {
 
 .runtime-process-status.status-queued i,
 .runtime-process-status.status-running i { background: #67d39c; animation: runtime-process-pulse 1.5s ease-in-out infinite; }
+.runtime-process-status.status-waiting_for_approval i { background: #f0bd52; animation: runtime-process-pulse 1.5s ease-in-out infinite; }
 .runtime-process-status.status-completed i { background: #78d7aa; }
 .runtime-process-status.status-failed i,
 .runtime-process-status.status-cancelled i { background: #ef827b; }
@@ -1215,6 +1216,28 @@ select:focus {
 .runtime-process-boundary span { grid-row: span 2; color: #786bb6; font-size: 8px; font-weight: 800; text-transform: uppercase; }
 .runtime-process-boundary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .runtime-process-boundary code { color: #77717e; font-size: 8px; }
+
+.runtime-process-trust-strip {
+  padding: 7px 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-bottom: 1px solid #e7e3dc;
+  background: #fbfaf7;
+}
+.runtime-process-trust-strip span {
+  padding: 3px 5px;
+  border: 1px solid #d9d2f2;
+  border-radius: 999px;
+  color: #6255a4;
+  background: #f2effd;
+  font-size: 6px;
+  font-weight: 850;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.runtime-process-trust-strip b { color: #aaa4b5; font-size: 7px; }
 
 .runtime-process-timeline { padding: 15px 17px 8px; }
 
@@ -1277,6 +1300,9 @@ select:focus {
 .runtime-process-decision code { color: #6d5cc6; font-size: 7px; }
 .runtime-process-decision.decision-allow span { color: #247453; background: #dff4e9; }
 .runtime-process-decision.decision-deny span { color: #a7443f; background: #f9dfdc; }
+
+.access-request-card { margin-top: 14px; margin-bottom: 14px; }
+.access-request-error { margin: 10px 0 0; color: #ff9b94; font-size: 9px; }
 
 .runtime-process-request-details {
   margin-top: 8px;
@@ -1383,6 +1409,29 @@ select:focus {
   font-size: 7px;
 }
 .runtime-process-footer strong { color: #5e5872; }
+
+.runtime-process-untriggered {
+  margin: 0 17px 12px;
+  border: 1px solid #e2ded6;
+  border-radius: 10px;
+  background: #f7f5f1;
+  overflow: hidden;
+}
+.runtime-process-untriggered > summary {
+  padding: 8px 10px;
+  color: #77736c;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 750;
+}
+.runtime-process-untriggered > summary span {
+  margin-left: 5px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: #e7e3dc;
+  font-size: 7px;
+}
+.runtime-process-untriggered .runtime-process-timeline { padding-bottom: 0; }
 
 @keyframes runtime-process-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

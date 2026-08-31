@@ -12,6 +12,7 @@ import { GroupChat } from "./GroupChat";
 import { GroupMembers } from "./GroupMembers";
 import { HumanDirectChat } from "./DirectMessages";
 import { AuthorizationEvidenceWindow } from "./AuthorizationEvidenceWindow";
+import { AccessRequestCard } from "./AccessRequestCard";
 import { MarkdownContent } from "./MarkdownContent";
 import { RuntimeProcessWindow } from "./RuntimeProcessWindow";
 import {
@@ -21,6 +22,7 @@ import {
   type PersonalSection,
 } from "./WorkspaceViews";
 import type {
+  AccessRequest,
   Agent,
   AgentRun,
   AuthorizationDecision,
@@ -39,6 +41,12 @@ const starterPrompts = [
   "Inspect this workspace and explain what you would improve first.",
   "Build a responsive single-page todo app with tests.",
 ];
+
+const activeRunStatuses = new Set<AgentRun["status"]>([
+  "queued",
+  "running",
+  "waiting_for_approval",
+]);
 
 interface AgentForm {
   name: string;
@@ -108,6 +116,7 @@ export default function App() {
   const [resources, setResources] = useState<ProtectedResource[]>([]);
   const [grants, setGrants] = useState<ResourceGrant[]>([]);
   const [decisions, setDecisions] = useState<AuthorizationDecision[]>([]);
+  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showCreateResource, setShowCreateResource] = useState(false);
@@ -235,6 +244,16 @@ export default function App() {
   const runtimeProcessDecisions = runtimeProcessRun
     ? decisions.filter((decision) => decision.runId === runtimeProcessRun.id)
     : [];
+  const runtimeProcessAccessRequest = runtimeProcessRun
+    ? accessRequests
+        .filter((request) => request.runId === runtimeProcessRun.id)
+        .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0] ?? null
+    : null;
+  const selectedPendingAccessRequests = selected
+    ? accessRequests
+        .filter((request) => request.agentId === selected.id && request.status === "pending")
+        .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+    : [];
   const sidebarChats = useMemo(() => [
     ...directConversations.map((conversation) => ({
       kind: "direct" as const,
@@ -279,14 +298,16 @@ export default function App() {
   }, []);
 
   const refreshSecurity = useCallback(async () => {
-    const [resourceResult, grantResult, decisionResult] = await Promise.all([
+    const [resourceResult, grantResult, decisionResult, accessRequestResult] = await Promise.all([
       api.resources(),
       api.grants(),
       api.decisions(),
+      api.accessRequests(),
     ]);
     setResources(resourceResult.resources);
     setGrants(grantResult.grants);
     setDecisions(decisionResult.decisions);
+    setAccessRequests(accessRequestResult.accessRequests);
   }, []);
 
   const refreshGroups = useCallback(async () => {
@@ -347,7 +368,7 @@ export default function App() {
         setRuns(runResult.runs);
         const latest = runResult.runs[0] ?? null;
         setActiveRun(latest);
-        if (latest && ["queued", "running"].includes(latest.status)) {
+        if (latest && activeRunStatuses.has(latest.status)) {
           setRuntimeProcessRunId(latest.id);
           void pollRun(latest.id, selectedId).catch((reason) =>
             setError(reason instanceof Error ? reason.message : String(reason)),
@@ -489,16 +510,18 @@ export default function App() {
       while (mountedRef.current) {
         await new Promise((resolve) => window.setTimeout(resolve, 900));
         if (!mountedRef.current) return;
-        const [result, decisionResult] = await Promise.all([
+        const [result, decisionResult, accessRequestResult] = await Promise.all([
           api.run(runId),
           api.decisions().catch(() => null),
+          api.accessRequests().catch(() => null),
         ]);
         if (decisionResult) setDecisions(decisionResult.decisions);
+        if (accessRequestResult) setAccessRequests(accessRequestResult.accessRequests);
         setRuns((current) => current.some((run) => run.id === result.run.id)
           ? current.map((run) => run.id === result.run.id ? result.run : run)
           : [result.run, ...current]);
         if (selectedIdRef.current === agentId) setActiveRun(result.run);
-        if (!["queued", "running"].includes(result.run.status)) {
+        if (!activeRunStatuses.has(result.run.status)) {
           await Promise.all([
             refreshMessages(agentId),
             refreshAgents(),
@@ -1103,7 +1126,7 @@ export default function App() {
                       setRuntimeProcessRunId((activeRun ?? runs[0])!.id);
                     }}
                   >
-                    <i className={activeRun && ["queued", "running"].includes(activeRun.status) ? "is-live" : ""} />
+                    <i className={activeRun && activeRunStatuses.has(activeRun.status) ? "is-live" : ""} />
                     后端过程
                   </button>
                 )}
@@ -1224,7 +1247,7 @@ export default function App() {
                     </article>
                   ))
                 )}
-                {activeRun && ["queued", "running"].includes(activeRun.status) && (
+                {activeRun && ["queued", "running"].includes(activeRun.status) && selectedPendingAccessRequests.length === 0 && (
                   <article className="message message-assistant thinking">
                     <div className="message-meta">
                       <strong>{selected.name}</strong>
@@ -1236,6 +1259,21 @@ export default function App() {
                     </div>
                   </article>
                 )}
+                {selectedPendingAccessRequests.map((request) => (
+                  <AccessRequestCard
+                    key={request.id}
+                    request={request}
+                    currentUser={currentUser}
+                    onResolve={async (id, resolution) => {
+                      const result = resolution === "approve"
+                        ? await api.approveAccessRequest(id)
+                        : await api.rejectAccessRequest(id);
+                      setAccessRequests((current) => current.map((item) =>
+                        item.id === result.accessRequest.id ? result.accessRequest : item
+                      ));
+                    }}
+                  />
+                ))}
                 {activeRun?.status === "failed" && (
                   <article className="run-error">
                     <strong>Run failed</strong>
@@ -1263,7 +1301,7 @@ export default function App() {
                   disabled={
                     selected.status === "stopped" ||
                     selected.status === "busy" ||
-                    activeRun != null && ["queued", "running"].includes(activeRun.status)
+                    activeRun != null && activeRunStatuses.has(activeRun.status)
                   }
                   rows={2}
                 />
@@ -1276,7 +1314,7 @@ export default function App() {
                       disabled={
                         selected.status === "stopped" ||
                         selected.status === "busy" ||
-                        (activeRun != null && ["queued", "running"].includes(activeRun.status))
+                        (activeRun != null && activeRunStatuses.has(activeRun.status))
                       }
                       title="附加即表示仅授权该 Agent 在本次运行中读取这份资料"
                     >
@@ -1292,7 +1330,7 @@ export default function App() {
                       !prompt.trim() ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
-                      (activeRun != null && ["queued", "running"].includes(activeRun.status))
+                      (activeRun != null && activeRunStatuses.has(activeRun.status))
                     }
                     aria-label="Send message"
                   >
@@ -1341,6 +1379,7 @@ export default function App() {
           currentUser={currentUser}
           run={runtimeProcessRun}
           decisions={runtimeProcessDecisions}
+          accessRequest={runtimeProcessAccessRequest}
           onClose={() => setRuntimeProcessRunId(null)}
           onRefresh={() => void Promise.all([
             api.run(runtimeProcessRun.id).then(({ run }) => {

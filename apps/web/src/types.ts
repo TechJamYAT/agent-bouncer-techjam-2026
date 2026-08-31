@@ -1,10 +1,11 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error" | "deleted";
 export type AgentScope = "personal" | "group" | "coordinator";
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type RunStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 export type MiddlewareEvidenceAction =
   | "resource:read"
   | "resource:process"
-  | "resource:disclose";
+  | "resource:disclose"
+  | "resource:forward";
 
 export interface MiddlewareEvidenceRequirement {
   action: MiddlewareEvidenceAction;
@@ -13,7 +14,7 @@ export interface MiddlewareEvidenceRequirement {
 
 export interface RuntimeToolEvent {
   tool: "vault";
-  operation: "list" | "read" | "assess" | "disclose";
+  operation: "list" | "read" | "assess" | "disclose" | "resolve" | "forward" | "request-forward";
   status: "completed" | "failed";
   exitCode: number | null;
   occurredAt: string;
@@ -133,7 +134,7 @@ export interface ResourceGrant {
   resourceId: string;
   granteeAgentId: string;
   grantedByUserId: string;
-  action: "read" | "process";
+  action: "read" | "process" | "disclose";
   duration: "persistent" | "run" | "task";
   runId: string | null;
   taskId: string | null;
@@ -191,7 +192,7 @@ export interface AuthorizationDecision {
   taskId: string | null;
   conversationId: string | null;
   action: string;
-  targetType: "agent" | "group" | "member" | "resource" | "grant" | "publication" | "shared_file";
+  targetType: "agent" | "group" | "member" | "resource" | "grant" | "publication" | "shared_file" | "access_request";
   targetId: string;
   decision: "allow" | "deny";
   reasonCode: string;
@@ -210,6 +211,29 @@ export interface AuthorizationDecision {
     responseStatus: number;
     redacted: true;
   };
+}
+
+export interface AccessRequest {
+  id: string;
+  requesterHumanId: string;
+  ownerUserId: string;
+  agentId: string;
+  resourceId: string;
+  action: "disclose" | "forward";
+  recipientUserId: string;
+  runId: string;
+  conversationId: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  sourceDecisionId: string;
+  requestedAt: string;
+  expiresAt: string;
+  resolvedAt: string | null;
+  resolvedByUserId: string | null;
+  resourceTitle: string;
+  agentName: string;
+  requesterName: string;
+  ownerName: string;
+  recipientName: string;
 }
 
 export type CoordinationMode = "manual" | "automatic";
