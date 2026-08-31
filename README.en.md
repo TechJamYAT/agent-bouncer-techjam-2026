@@ -132,6 +132,7 @@ limitations.
 - `apps/server/src/agent-prompt-builder.ts` — authenticated model prompt construction.
 - `apps/server/src/runtime-credential-service.ts` — opaque Run credential lifecycle.
 - `apps/server/src/protected-resource-workflow.ts` — durable approval and evidence state machine.
+- `apps/server/src/runtime-context-builder.ts` — bounded Runtime context snapshots.
 - `apps/server/src/app.ts` — authenticated HTTP and Runtime boundaries.
 - `apps/web/src/AuthorizationEvidenceWindow.tsx` — human-readable evidence.
 - `docs/ARCHITECTURE.md` — architecture and trust boundaries.
