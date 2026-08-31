@@ -134,14 +134,20 @@ from “vault ran but no policy decision was linked.” Stored tool metadata con
 only the vault operation, exit status, and timestamp; command arguments and tool
 output are discarded.
 
-### AgentService
+### Application services
 
-Coordinates authenticated humans, Agent principals, conversations, task projects,
-policy decisions, scoped Runtime credentials, and Runs. One Agent can have only
-one active Run. Runtime state is keyed by `(agentId, conversationId)`; it is not
-stored on the Agent itself. A Run credential is held only in memory as a token
-hash and is deleted when execution ends. Run-scoped resource grants are revoked
-on success, failure, or cancellation.
+`AgentService` remains the compatibility facade and Run orchestrator used by the
+HTTP layer. Human sessions, group membership, and Agent-principal lifecycle are
+owned by `PrincipalService`. Model-facing identity, protected-tool, direct-Run,
+group-step, and coordinator prompts are built by `AgentPromptBuilder` from
+authenticated server state. Model credentials are owned separately by
+`ModelRuntimeConfiguration`.
+
+One Agent can have only one active Run. Runtime state is keyed by
+`(agentId, conversationId)`; it is not stored on the Agent itself. A Run
+credential is held only in memory as a token hash and is deleted when execution
+ends. Run-scoped resource grants are revoked on success, failure, or
+cancellation.
 
 ```text
 ready -> busy -> ready
@@ -152,14 +158,14 @@ stopped  error
 
 Interrupted Runs become `cancelled` after a restart.
 
-`AgentService` is still the largest module and currently combines several
-application-service responsibilities. Policy evaluation, persistence,
-coordination, workspace management, runner implementations, and mutable model
-Runtime configuration are already separate modules. The next low-risk
-decomposition should extract protected-resource approval/resume orchestration
-and direct-message/Agent lifecycle services behind the existing HTTP contract;
-this should be done after the hackathon flow is frozen, not as an unbounded
-pre-demo rewrite.
+`AgentService` is still the largest module because protected-resource
+approval/resume state, direct conversations, and Run finalization are tightly
+coupled. Policy evaluation, persistence, coordination, principal lifecycle,
+prompt construction, workspace management, runner implementations, and mutable
+model Runtime configuration are now separate modules. The next decomposition
+boundary is protected-resource approval/resume orchestration; it should be
+extracted incrementally with the existing race, restart, idempotency, and final
+evidence tests kept green after every step.
 
 ### Model Runtime configuration
 

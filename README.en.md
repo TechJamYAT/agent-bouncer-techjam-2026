@@ -127,7 +127,9 @@ limitations.
 ## Primary files
 
 - `apps/server/src/policy.ts` — reusable protected-resource policy.
-- `apps/server/src/agent-service.ts` — Run orchestration and trusted enforcement.
+- `apps/server/src/agent-service.ts` — compatible Run-orchestration facade and trusted enforcement.
+- `apps/server/src/principal-service.ts` — human sessions, groups, and Agent lifecycle.
+- `apps/server/src/agent-prompt-builder.ts` — authenticated model prompt construction.
 - `apps/server/src/app.ts` — authenticated HTTP and Runtime boundaries.
 - `apps/web/src/AuthorizationEvidenceWindow.tsx` — human-readable evidence.
 - `docs/ARCHITECTURE.md` — architecture and trust boundaries.

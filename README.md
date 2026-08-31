@@ -270,7 +270,7 @@ flowchart LR
 
 ```text
 apps/web/                 React UI 与权限证据窗口
-apps/server/              Fastify API、AgentService、策略与测试
+apps/server/              Fastify API、Run 编排、主体服务、提示词构建、策略与测试
 apps/server/src/policy.ts Bouncer 资源读取策略
 scripts/                  本地 POC、部署与初始化脚本
 docs/                     架构、赛道设计、运行和部署说明
