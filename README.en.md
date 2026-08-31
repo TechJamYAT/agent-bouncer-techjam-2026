@@ -130,6 +130,8 @@ limitations.
 - `apps/server/src/agent-service.ts` — compatible Run-orchestration facade and trusted enforcement.
 - `apps/server/src/principal-service.ts` — human sessions, groups, and Agent lifecycle.
 - `apps/server/src/agent-prompt-builder.ts` — authenticated model prompt construction.
+- `apps/server/src/runtime-credential-service.ts` — opaque Run credential lifecycle.
+- `apps/server/src/protected-resource-workflow.ts` — durable approval and evidence state machine.
 - `apps/server/src/app.ts` — authenticated HTTP and Runtime boundaries.
 - `apps/web/src/AuthorizationEvidenceWindow.tsx` — human-readable evidence.
 - `docs/ARCHITECTURE.md` — architecture and trust boundaries.

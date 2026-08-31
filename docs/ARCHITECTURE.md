@@ -140,8 +140,11 @@ output are discarded.
 HTTP layer. Human sessions, group membership, and Agent-principal lifecycle are
 owned by `PrincipalService`. Model-facing identity, protected-tool, direct-Run,
 group-step, and coordinator prompts are built by `AgentPromptBuilder` from
-authenticated server state. Model credentials are owned separately by
-`ModelRuntimeConfiguration`.
+authenticated server state. Opaque Run credentials and their in-memory expiry
+are owned by `RuntimeCredentialService`. Durable access-request transitions,
+approval timeouts, bound final-evidence checks, and waiting-Run cancellation are
+owned by `ProtectedResourceWorkflowService`. Model credentials are owned
+separately by `ModelRuntimeConfiguration`.
 
 One Agent can have only one active Run. Runtime state is keyed by
 `(agentId, conversationId)`; it is not stored on the Agent itself. A Run
@@ -158,14 +161,14 @@ stopped  error
 
 Interrupted Runs become `cancelled` after a restart.
 
-`AgentService` is still the largest module because protected-resource
-approval/resume state, direct conversations, and Run finalization are tightly
-coupled. Policy evaluation, persistence, coordination, principal lifecycle,
-prompt construction, workspace management, runner implementations, and mutable
-model Runtime configuration are now separate modules. The next decomposition
-boundary is protected-resource approval/resume orchestration; it should be
-extracted incrementally with the existing race, restart, idempotency, and final
-evidence tests kept green after every step.
+`AgentService` is still the largest module because Runtime continuation,
+direct conversations, coordination execution, and Run finalization remain
+tightly coupled. Policy evaluation, persistence, coordination, principal
+lifecycle, prompt construction, Runtime credentials, durable approval state,
+workspace management, runner implementations, and mutable model Runtime
+configuration are now separate modules. Any further decomposition should move
+Runtime continuation behind a narrow callback boundary while keeping the
+existing race, restart, idempotency, and final-evidence tests green.
 
 ### Model Runtime configuration
 
