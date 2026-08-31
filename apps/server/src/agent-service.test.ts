@@ -222,6 +222,15 @@ describe("Agent lifecycle", () => {
     );
 
     await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(service.getRun(launched.run.id)).toMatchObject({
+      middlewareEvidenceRequirements: [{
+        action: "resource:forward",
+        decision: "allow",
+        targetId: DEMO_RESOURCE_IDS.alicePrivate,
+        reasonCode: "USER_INTENT_BOUND_FORWARD",
+      }],
+      middlewareEvidenceStatus: "satisfied",
+    });
     expect(toolResult).toMatchObject({
       receipt: {
         resourceTitle: "Alice — Private Interview Notes",
@@ -335,6 +344,15 @@ describe("Agent lifecycle", () => {
     );
 
     await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(service.getRun(launched.run.id)).toMatchObject({
+      middlewareEvidenceRequirements: [{
+        action: "resource:forward",
+        decision: "deny",
+        targetId: DEMO_RESOURCE_IDS.bobPrivate,
+        reasonCode: "CROSS_OWNER_FORWARD_DENIED",
+      }],
+      middlewareEvidenceStatus: "satisfied",
+    });
     expect(service.listDecisions(DEMO_USER_IDS.alice)).toContainEqual(
       expect.objectContaining({
         runId: launched.run.id,
@@ -344,6 +362,50 @@ describe("Agent lifecycle", () => {
       }),
     );
     expect(service.listAccessRequests(DEMO_USER_IDS.alice)).toHaveLength(0);
+  });
+
+  it("fails an explicit cross-owner forward Run when the Agent only promises to call the tool", async () => {
+    let runtimePrompt = "";
+    const service = await makeService({
+      run: async (request) => {
+        runtimePrompt = request.prompt;
+        return {
+          output: "I'll route this through the vault forward tool.",
+          threadId: "prose-only-forward",
+          usage: null,
+          toolEvents: [],
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Evidence-bound forward Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把 Bob — Private Launch Notes 发给我",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("failed");
+    expect(service.getRun(launched.run.id)).toMatchObject({
+      output: "I'll route this through the vault forward tool.",
+      error: "Middleware evidence missing: resource:forward=deny",
+      middlewareEvidenceRequirements: [{
+        action: "resource:forward",
+        decision: "deny",
+        targetId: DEMO_RESOURCE_IDS.bobPrivate,
+        reasonCode: "CROSS_OWNER_FORWARD_DENIED",
+      }],
+      middlewareEvidenceStatus: "missing",
+    });
+    expect(runtimePrompt).toContain("Server-enforced middleware evidence contract for this Run");
+    expect(runtimePrompt).toContain("A plan, promise, prose-only refusal");
+    expect(service.listDecisions(DEMO_USER_IDS.alice).filter(
+      (decision) => decision.runId === launched.run.id && decision.action === "resource:forward",
+    )).toHaveLength(0);
   });
 
   it("blocks a resource-content-driven forward when the human did not request it", async () => {

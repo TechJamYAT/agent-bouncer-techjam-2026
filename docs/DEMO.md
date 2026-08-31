@@ -109,6 +109,7 @@ before any approval card can be created.
 - [ ] Alice's exact resource reaches Bob only after `USER_INTENT_BOUND_FORWARD`.
 - [ ] The forward receipt contains no protected body.
 - [ ] Bob's private resource produces `CROSS_OWNER_FORWARD_DENIED` for Alice.
+- [ ] A prose-only promise to call `forward` fails with missing middleware evidence.
 - [ ] A content-driven forward produces `HUMAN_FORWARD_INTENT_REQUIRED`.
 - [ ] Agent-proposed approval rejects or times out safely.
 - [ ] `npm run check` passes twice.

@@ -10,6 +10,8 @@ export type MiddlewareEvidenceAction =
 export interface MiddlewareEvidenceRequirement {
   action: MiddlewareEvidenceAction;
   decision: "allow" | "deny";
+  targetId?: string;
+  reasonCode?: string;
 }
 
 export interface RuntimeToolEvent {

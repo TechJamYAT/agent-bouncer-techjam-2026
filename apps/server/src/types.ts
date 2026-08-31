@@ -49,6 +49,10 @@ export type MiddlewareEvidenceStatus =
 export interface MiddlewareEvidenceRequirement {
   action: MiddlewareEvidenceAction;
   decision: AuthorizationDecisionValue;
+  /** Optional server-derived binding used for Run-local evidence contracts. */
+  targetId?: string | undefined;
+  /** Optional server-derived reason binding; clients cannot set this through task APIs. */
+  reasonCode?: string | undefined;
 }
 
 export interface RuntimeToolEvent {

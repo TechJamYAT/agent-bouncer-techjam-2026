@@ -1478,6 +1478,18 @@ export class AgentService {
       message,
       attachedResources: uniqueReferencedResources,
     });
+    const forwardEvidenceRequirement = forwardIntentGrant
+      ? {
+          action: "resource:forward" as const,
+          decision: "allow" as const,
+          targetId: forwardIntentGrant.resourceId,
+          reasonCode: "USER_INTENT_BOUND_FORWARD",
+        }
+      : this.crossOwnerForwardEvidenceRequirement(referenceDatabase, humanId, prompt);
+    if (forwardEvidenceRequirement) {
+      run.middlewareEvidenceRequirements = [forwardEvidenceRequirement];
+      run.middlewareEvidenceStatus = "pending";
+    }
     const attachmentReadGrants: ResourceGrant[] = uniqueReferencedResources
       .filter((resource) => resource.scope === "private")
       .map((resource) => ({
@@ -1639,6 +1651,45 @@ export class AgentService {
       createdAt,
       consumedAt: null,
       revokedAt: null,
+    };
+  }
+
+  private crossOwnerForwardEvidenceRequirement(
+    database: Database,
+    humanId: string,
+    rawPrompt: string,
+  ): MiddlewareEvidenceRequirement | null {
+    const prompt = rawPrompt.trim().toLocaleLowerCase();
+    if (!/(转发|发送|发给|交给|分享给|forward|send|share)/iu.test(prompt)) return null;
+
+    const matches = database.resources.filter(
+      (resource) =>
+        resource.scope === "private" &&
+        resource.ownerUserId !== humanId &&
+        prompt.includes(resource.title.trim().toLocaleLowerCase()),
+    );
+    if (matches.length !== 1) return null;
+
+    const selfRecipient = /(?:发|发送|转发|交|分享)(?:给|至|到)?\s*(?:我|本人)|(?:给|向)我|(?:send|forward|share)[\s\S]*\bto\s+me\b/iu
+      .test(prompt);
+    const recipientMarker = /(?:发给|发送给|转发给|交给|分享给|\bto\b)/giu;
+    const markerMatches = [...prompt.matchAll(recipientMarker)];
+    const lastMarker = markerMatches.at(-1);
+    const recipientTail = lastMarker
+      ? prompt.slice((lastMarker.index ?? 0) + lastMarker[0].length)
+      : "";
+    const namedRecipients = database.users.filter((user) => {
+      const username = user.username.trim().toLocaleLowerCase();
+      const displayName = user.displayName.trim().toLocaleLowerCase();
+      return recipientTail.includes(username) || recipientTail.includes(displayName);
+    });
+    if (!selfRecipient && namedRecipients.length !== 1) return null;
+
+    return {
+      action: "resource:forward",
+      decision: "deny",
+      targetId: matches[0]!.id,
+      reasonCode: "CROSS_OWNER_FORWARD_DENIED",
     };
   }
 
@@ -4240,6 +4291,8 @@ export class AgentService {
           : [];
       });
     const groupContext = this.groupContextPrompt(agent);
+    const evidenceRequirements = database.runs.find((item) => item.id === runId)
+      ?.middlewareEvidenceRequirements ?? [];
     return [
       this.agentIdentityPrompt(agent),
       "",
@@ -4262,6 +4315,18 @@ export class AgentService {
             "The human explicitly attached these private knowledge resources for this Run:",
             JSON.stringify(attachedResources, null, 2),
             "Read them through the protected vault tool using owner username and exact title before answering.",
+          ]
+        : []),
+      ...(evidenceRequirements.length > 0
+        ? [
+            "",
+            "Server-enforced middleware evidence contract for this Run:",
+            JSON.stringify(
+              evidenceRequirements.map(({ action, decision }) => ({ action, decision })),
+              null,
+              2,
+            ),
+            "You MUST make the real protected vault call required by the human request before replying. A plan, promise, prose-only refusal, or inferred result does not satisfy this contract, and the Run will fail without a matching backend policy decision.",
           ]
         : []),
       "",
@@ -4775,7 +4840,27 @@ export class AgentService {
         (decision) =>
           decision.action === requirement.action &&
           decision.decision === requirement.decision &&
-          decision.targetId === grantedResourceId,
+          decision.targetId === (requirement.targetId ?? grantedResourceId) &&
+          (!requirement.reasonCode || decision.reasonCode === requirement.reasonCode),
+      ),
+    );
+  }
+
+  private missingDirectMiddlewareEvidenceRequirements(
+    runId: string,
+    requirements: MiddlewareEvidenceRequirement[],
+  ): MiddlewareEvidenceRequirement[] {
+    if (requirements.length === 0) return [];
+    const decisions = this.store.snapshot().authorizationDecisions.filter(
+      (decision) => decision.runId === runId,
+    );
+    return requirements.filter(
+      (requirement) => !decisions.some(
+        (decision) =>
+          decision.action === requirement.action &&
+          decision.decision === requirement.decision &&
+          (!requirement.targetId || decision.targetId === requirement.targetId) &&
+          (!requirement.reasonCode || decision.reasonCode === requirement.reasonCode),
       ),
     );
   }
@@ -5049,6 +5134,29 @@ export class AgentService {
         });
         return;
       }
+      const missingEvidence = this.missingDirectMiddlewareEvidenceRequirements(
+        run.id,
+        run.middlewareEvidenceRequirements ?? [],
+      );
+      if (missingEvidence.length > 0) {
+        await this.store.mutate((database) => {
+          const storedRun = database.runs.find((item) => item.id === run.id);
+          if (!storedRun) return;
+          storedRun.output = result.output;
+          storedRun.usage = result.usage;
+          storedRun.runtimeToolEvents = [
+            ...(storedRun.runtimeToolEvents ?? []),
+            ...(result.toolEvents ?? []),
+          ];
+          storedRun.middlewareEvidenceStatus = "missing";
+        });
+        throw new Error(
+          "Middleware evidence missing: " +
+            missingEvidence
+              .map((requirement) => `${requirement.action}=${requirement.decision}`)
+              .join(", "),
+        );
+      }
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
@@ -5064,7 +5172,10 @@ export class AgentService {
           ...(storedRun.runtimeToolEvents ?? []),
           ...(result.toolEvents ?? []),
         ];
-        storedRun.middlewareEvidenceStatus = "not_required";
+        storedRun.middlewareEvidenceStatus =
+          (storedRun.middlewareEvidenceRequirements?.length ?? 0) > 0
+            ? "satisfied"
+            : "not_required";
         storedRun.completedAt = completedAt;
         database.messages.push({
           id: randomUUID(),
