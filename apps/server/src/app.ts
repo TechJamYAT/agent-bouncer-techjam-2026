@@ -64,6 +64,9 @@ const runtimeResourceReferenceBody = z.object({
   ownerUsername: z.string().trim().min(1).max(80),
   title: z.string().trim().min(1).max(200),
 }).strict();
+const runtimePrivateCatalogBody = z.object({
+  ownerUsername: z.string().trim().min(1).max(80),
+}).strict();
 const runtimeResourceProcessBody = runtimeResourceReferenceBody.extend({
   operation: z.literal("launch-risk-check"),
 }).strict();
@@ -640,14 +643,27 @@ export async function createApp(
     service.getResourceCatalogForRuntime(runtimeToken(request))
   );
 
+  app.post("/api/runtime/resources/catalog", async (request, reply) => {
+    const result = await service.getPrivateResourceCatalogForRuntime(
+      runtimeToken(request),
+      runtimePrivateCatalogBody.parse(request.body),
+    );
+    return "pending" in result && result.pending
+      ? reply.code(202).send(result)
+      : result;
+  });
+
   app.get("/api/runtime/resources/:id", async (request) => {
     const { id } = idParams.parse(request.params);
     return service.readResourceForRuntime(runtimeToken(request), id);
   });
 
-  app.post("/api/runtime/resources/read", async (request) => {
+  app.post("/api/runtime/resources/read", async (request, reply) => {
     const reference = runtimeResourceReferenceBody.parse(request.body);
-    return service.readResourceForRuntimeByReference(runtimeToken(request), reference);
+    const result = await service.readResourceForRuntimeByReference(runtimeToken(request), reference);
+    return "pending" in result && result.pending
+      ? reply.code(202).send(result)
+      : result;
   });
 
   app.post("/api/runtime/resources/process", async (request) => {

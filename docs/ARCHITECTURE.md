@@ -70,14 +70,25 @@ Specific denial reasons are persisted for audit, while inaccessible and
 nonexistent resource references produce the same Runtime response so private
 titles cannot be confirmed by probing.
 
-### Read is not forward
+### Discovery, read, and forward are separate capabilities
 
-Attaching an owned resource creates a Run-scoped `read` grant, so useful context
-does not require a duplicate confirmation. An external `forward` is evaluated
-separately. The trusted control plane derives a capability only from the current
-human-authored message and binds it to `(human, Agent, Run, resource,
-recipient)`. The backend delivers the body directly and returns only a receipt
-to Runtime.
+The default Runtime catalog contains only resources already readable by the Run
+and does not reveal private-catalog existence. `list --owner <initiating human>`
+creates a metadata-only approval; approval reveals titles, kinds, and creation
+times for that human's own private resources but grants no content action.
+
+An exact title is blindly resolved in the control plane. Missing, inaccessible,
+and nonexistent references have the same Runtime-facing failure. If the exact
+owned resource is not attached, `read` creates an exact-resource owner approval;
+an attachment already supplies that Run-scoped read-and-answer grant.
+
+An external `forward` is always evaluated separately. For an explicitly attached
+own resource, the Agent may create the exact recipient-bound owner request
+immediately. For an unattached own resource, the server first requires the
+metadata-only catalog approval in the same Run; only after the exact file is
+confirmed may the Agent create the forward request. Approval binds
+`(human, Agent, Run, resource, recipient)`; free-form text cannot mint it. The
+backend delivers the body directly and returns only a receipt to Runtime.
 
 An unbound direct forward returns `HUMAN_FORWARD_INTENT_REQUIRED`. An Agent may
 instead submit `request-forward`, which pauses the Run and presents an owner
@@ -86,14 +97,22 @@ credential; rejection and timeout resume without delivery. If Bob owns the
 resource while Alice initiates the Run, `CROSS_OWNER_FORWARD_DENIED` is returned
 before an approval can be created—Alice cannot approve Bob's data.
 
+Access-request persistence and the Run transition to `waiting_for_approval` are
+one store mutation. This prevents a fast owner decision from racing the end of
+the current Agent turn. Approval also adds a bound final-action evidence
+requirement. If a resumed turn does not execute that exact action, the trusted
+control plane performs only the approved operation and supplies its result to a
+follow-up turn; approval alone is never treated as successful fulfillment.
+
 ### Processing is not disclosure
 
 Task-scoped grants to group Agents are purpose-limited `process` grants. The
 protected processor may inspect the resource inside the Bouncer boundary and
 return a fixed aggregate (`risk_signals_present` or
 `no_risk_signals_found`), but it never returns source text to the user-facing
-Runtime. A request to quote, copy, or summarize the source in the current
-conversation must use the separate disclosure action. External forwarding uses
+Runtime. A request to quote, copy, or return the raw source in the current
+conversation must use the separate disclosure action; an approved read may be
+used for the initiating human's requested summary. External forwarding uses
 the recipient-bound action above. Disclosure is authorized against the
 initiating human as the recipient, so a task initiated by Alice can process a
 Bob-owned resource with Bob's grant while still denying disclosure to Alice.

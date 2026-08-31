@@ -1,5 +1,7 @@
 # Agent Launchpad — Bouncer 授权中间件
 
+> English submission overview: [README.en.md](README.en.md)
+
 本项目基于赛题提供的 Agent Launchpad，选择且只实现一条连贯的 middleware 主线：
 **Bouncer（身份与授权）**。
 
@@ -7,10 +9,14 @@
 后端能否区分**发起任务的人**与**实际执行的 Agent**，并在读取受保护资源时作出可验证的
 允许或拒绝决定。
 
-本项目的完整演示路径是：Alice 附加自己的资料后，`Case` 可以读取；Alice 明确要求将
-这份资料发给 Bob 时，后端把用户原始消息绑定为仅限当前 Run、资料和接收人的能力并直接
-交付；如果 Agent 没有用户指令就尝试转发，或者 Alice 要求把 Bob 的资料发给自己，
-Bouncer 会拒绝且不返回正文。Agent 只写一段“我尝试过”的文字不会被判定为完成。
+本项目的完整演示路径是渐进授权：Alice 附加自己的资料后，`Case` 可在当前 Run 直接读取；
+没有附件时，Agent 点名精确资料会触发读取审批，未知资料则安全失败；不知道名称时，Agent
+先申请 Alice 本人目录的最小元数据权限。未附加资料的外发必须先审批目录、确认精确文件，再
+审批文件与接收人；已附加资料则可直接进入转发审批。后端直接交付且不把正文返回 Agent。
+Alice 不能批准 Bob 的资料。
+
+界面右上角/侧栏提供中文与英文切换并记住本机选择。该功能只切换固定 UI 文案；用户消息、
+Agent 输出、资料内容、命令、API 路径和审计原因码保持原样，避免改变 Agent 行为或证据语义。
 
 > 个人/群组工作区、群聊和多 Agent 协作是 Bouncer 的真实产品场景，
 > 不是第二个参赛赛道。评审主线始终是身份传递、后端授权与拒绝证据。
@@ -24,17 +30,21 @@ Bouncer 会拒绝且不返回正文。Agent 只写一段“我尝试过”的文
 - 每次运行绑定 `humanId + agentId + runId + conversationId`。
 - Runtime 只获得短期、限范围凭证，不能自行扩大权限。
 - 私人资料默认不可读，必须由资料所有者明确授权。
+- 私人资料目录默认连存在性都不暴露；只有发起人可批准当前 Run 查看自己目录的标题、类型和创建时间。
+- 精确点名采用后端盲解析；不存在、越权和不可见引用对 Runtime 返回同一失败结果。
 - 个人 Agent 永远不能读取其他用户的私人资料。
 - 群 Agent 不能继承发起人的跨群身份，也不能跨群读取资料。
 - 所有受保护知识读取均由后端统一资源策略判定，而不是由提示词或前端决定。
 - `read`、当前对话原文交付和外部 `forward` 是三个独立动作。
 - 外部转发必须携带资料所有者、精确资料和已注册接收人；正文由后端直接交付，不返回 Agent。
-- 用户原始消息可生成 Run 级转发意图；Agent 输出和资料正文不能生成该能力。
+- Agent 只能创建目录、读取、原文或转发的待审批申请；自由文本、Agent 输出和资料正文均不能生成 grant。
 - Alice 永远不能授权转发 Bob 的资料，即使接收人是 Alice 本人。
 - Agent 自主提出转发时只能创建资料所有者审批；不能先执行再补审批。
 - 单次 Run 授权会在成功、失败或取消后立即撤销。
-- 缺少披露授权时会创建持久化审批请求并暂停同一逻辑 Run；同意、拒绝或超时后以新短期凭证恢复。
+- 缺少目录、读取、原文或转发授权时会原子创建持久化审批请求并立即暂停同一逻辑 Run；即使审批早于原 Agent 回合结束，也会以新短期凭证准确恢复一次。
+- 批准会动态绑定最终动作证据；Agent 若只声称已申请或在恢复后跳过工具，控制面会补建申请或确定性完成获批的精确动作，未产生最终 `ALLOW` 的 Run 不能成功结束。
 - 审批默认 5 分钟超时并自动拒绝；等待期间不保留 Runtime 进程或可用凭证。
+- 后端过程看板用 `sourceDecisionId` 将安全阻断与审批单关联：待处理显示“需审批/等待”，批准后显示重试的 `ALLOW`；拒绝、超时和不可审批的硬拒绝才显示红色终态。底层 `DENY` 仍完整保留用于审计。
 - 每个决定记录人类、Agent、动作、资源、允许/拒绝、原因码和策略版本。
 - 任务可声明服务端证据契约；缺少真实策略决策时步骤失败并进入可重试状态。
 - Runtime 只记录脱敏后的 vault 操作类型、退出状态和时间，不保存命令参数或工具输出。
@@ -53,16 +63,18 @@ Bouncer 会拒绝且不返回正文。Agent 只写一段“我尝试过”的文
 | 正常案例与拒绝案例 | Alice 自有资料允许读取/转发；Bob 私有资料和注入式转发被拒 |
 | 自动化证据 | `npm run check` 运行类型检查、授权测试和生产构建 |
 
-## 核心演示：意图绑定的读取与转发边界
+## 核心演示：渐进式目录、读取与转发授权
 
 这是一个混淆代理（confused deputy）与资料外泄防护演示：
 
-1. Alice 将 `Alice — Private Interview Notes` 附加到 Run，Bouncer 创建仅限本次运行的
-   `read` grant；Agent 无需重复向 Alice 申请读取。
-2. Alice 明确输入“把《Alice — Private Interview Notes》发给 bob”。控制面只从这条
-   人类消息生成 `(Run, resource, recipient)` 意图，Agent 调用 `vault.mjs forward`。
-3. Bouncer 记录 `resource:forward = allow / USER_INTENT_BOUND_FORWARD`，后端把资料直接
-   写入 Alice 与 Bob 的私聊，Runtime 只收到不含正文的交付回执。
+1. Alice 未附加资料并询问“我有哪些资料”。Agent 调用 `vault.mjs list --owner alice`，
+   Bouncer 暂停 Run；Alice 批准后只返回她自己的标题、类型和创建时间，不返回正文。
+2. Alice 选择精确资料后，读取仍是独立动作。若资料未附加，Agent 发起 exact-resource read
+   申请；若已附加，则附件本身创建仅限当前 Run 的 `read` grant，无需重复确认。
+3. Alice 要求转发给 Bob。若文件未附加，Bouncer 先要求本 Run 的目录元数据审批；确认文件后，
+   Agent 再创建精确 `(Run, resource, recipient)` 审批。若文件已附加，则直接进入这一步。
+   Alice 批准后，Bouncer 记录 `resource:forward = allow / USER_INTENT_BOUND_FORWARD`，后端
+   把资料直接写入 Alice 与 Bob 的私聊，Runtime 只收到不含正文的交付回执。
 4. Alice 再要求“把 Bob — Private Launch Notes 发给我”。后端记录
    `resource:forward = deny / CROSS_OWNER_FORWARD_DENIED`，且不会生成 Alice 可批准的卡片。
 5. 当资料正文诱导 Agent 转发、但 Alice 没有发出转发指令时，后端记录
@@ -71,15 +83,13 @@ Bouncer 会拒绝且不返回正文。Agent 只写一段“我尝试过”的文
 因此，授权不是靠提示词声明：是否允许外部交付由后端核对所有权、用户消息来源、Run、
 资料和接收人。即使 Agent 被资料内容诱导，也无法自行制造用户授权。
 
-精确的人工转发请求还会自动生成 Run 级 middleware 证据契约。Agent 必须真实触发与目标
-资料绑定的 `resource:forward` 允许或拒绝决定；只回复“将调用工具”、仅作文字拒绝或调用
-错误资料都会使 Run 失败并显示证据缺失。
+受保护动作必须产生与当前 Run 绑定的真实后端策略决定；Agent 只回复“将调用工具”不会创建
+grant、审批或交付回执。任务场景还可显式声明 middleware 证据契约，缺少绑定决定时步骤失败。
 
 ## 三分钟现场演示
 
-建议只演示“一次正常转发 + 一次跨所有者拒绝”。Agent 自主提出转发的审批/超时流程作为
-备用证据：`request-forward` 会把卡片放在主对话，批准后以新短期凭证恢复同一 Run；拒绝或
-超时则在不交付资料的情况下恢复。
+建议演示“一次目录审批 + 一次外发审批 + 一次跨所有者拒绝”。每次批准都会销毁旧 Runtime
+凭证，并以新短期凭证恢复同一逻辑 Run；拒绝或超时则在不泄漏正文的情况下恢复。
 
 ### 0:00–0:45：正常读取
 
@@ -87,22 +97,30 @@ Alice 打开 `Case`，附加 `Alice — Private Interview Notes` 并要求总结
 `resource:read = allow / EXPLICIT_PRIVATE_GRANT`，说明附加动作已经是本次 Run 的读取授权，
 不会再弹一次确认。
 
-### 0:45–1:35：明确转发
+### 0:45–1:20：目录与读取申请
 
-Alice 输入“把《Alice — Private Interview Notes》发给 bob”。打开“后端执行过程”，展示：
+Alice 不附加资料，询问“我有哪些资料”。批准目录元数据申请；随后点名一份资料并批准读取。
+展示目录批准没有自动授予正文权限。
 
+### 1:20–2:00：明确转发
+
+Alice 不附加资料，输入“把 Alice — Private Interview Notes 发给 Bob”。先批准仅元数据目录卡，
+确认文件存在，再在转发审批卡核对精确资料和接收人：
+
+- `POST /api/runtime/resources/catalog`；
 - `POST /api/runtime/resources/forward`；
 - `200 ALLOW / USER_INTENT_BOUND_FORWARD`；
+- `approval:approve / RESOURCE_OWNER_APPROVED`；
 - Bob 的私聊中出现后端交付的资料；
 - Agent 回复和工具回执中没有资料正文。
 
-### 1:35–2:25：跨所有者硬拒绝
+### 2:00–2:35：跨所有者硬拒绝
 
 Alice 输入“把 Bob — Private Launch Notes 发给我”。展示
 `403 DENY / CROSS_OWNER_FORWARD_DENIED`，并指出 Alice 不是资料所有者，因此不会出现
 “让 Alice 自己批准”的错误审批卡。
 
-### 2:25–3:00：证据与生命周期
+### 2:35–3:00：证据与生命周期
 
 展示权限证据中的 human、Agent、Run、resource、recipient 和原因码，以及 Run 结束后的
 凭证/未消费意图撤销。最后展示自动化测试。备用路径可演示 Agent 使用 `request-forward`

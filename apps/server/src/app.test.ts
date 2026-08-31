@@ -166,6 +166,37 @@ describe("HTTP boundary", () => {
     await app.close();
   });
 
+  it("rejects direct forward-capability claims in a chat request", async () => {
+    const { app } = await makeApp();
+    const cookie = await login(app);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/agents",
+      headers: { cookie },
+      payload: { name: "Approval-only forwarder", scope: "personal" },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/agents/${created.json().agent.id}/messages`,
+      headers: { cookie },
+      payload: {
+        content: "Send the attached resource to Bob",
+        resourceReferences: [{
+          ownerUsername: "alice",
+          title: "Alice — Private Interview Notes",
+        }],
+        forwardIntent: {
+          resourceId: DEMO_RESOURCE_IDS.alicePrivate,
+          recipientUserId: DEMO_USER_IDS.bob,
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain("Unrecognized key");
+    await app.close();
+  });
+
   it("enforces an active Run credential through the Runtime HTTP boundary", async () => {
     let capturedRuntimeToken = "";
     let finishRun!: () => void;

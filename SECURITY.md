@@ -1,7 +1,7 @@
 # Security policy
 
-Volc Agent Launchpad is a hackathon proof of concept. Only the latest revision
-on the default branch is supported.
+Volc Agent Launchpad is a hackathon proof of concept. Only the exact revision
+linked by the current submission is supported.
 
 ## Report a vulnerability
 
@@ -31,8 +31,10 @@ credentials, personal data, or exploit details in an issue.
   request bodies cannot replace it.
 - Every Agent is a separate principal. Protected Runtime calls require an opaque,
   short-lived credential bound to the human, Agent, Run, conversation, and task.
-- `read`, sealed `process`, and recipient-facing `disclose` are separate server-side
-  policy decisions. A processing grant does not authorize disclosure.
+- Private-catalog metadata, `read`, sealed `process`, raw `disclose`, and external
+  `forward` are separate server-side decisions. The default Runtime context does
+  not expose private-catalog existence. Exact missing and inaccessible references
+  fail identically, and free-form text can create only a pending owner request.
 - Run and task grants are scoped and revocable. Runtime credentials are stored only
   as hashes and removed when execution ends.
 - Authorization details are deterministically redacted before storage. Runtime tool

@@ -16,6 +16,37 @@
   --shadow: 0 24px 60px rgba(39, 38, 33, 0.12);
 }
 
+.language-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #d9d5ca;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.language-toggle button {
+  min-width: 38px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 999px;
+  color: #77736a;
+  background: transparent;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.language-toggle button.selected {
+  color: #fff;
+  background: #6f5bcc;
+  box-shadow: 0 2px 7px rgba(75, 61, 134, 0.2);
+}
+
+.language-toggle.is-compact button { min-width: 31px; padding: 4px 7px; font-size: 8px; }
+
 * {
   box-sizing: border-box;
 }
@@ -35,12 +66,30 @@ body {
 }
 
 .auth-card {
+  position: relative;
   width: min(420px, 100%);
   padding: 34px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--paper);
   box-shadow: var(--shadow);
+}
+
+.auth-card > .language-toggle {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+}
+
+.auth-card .language-toggle button {
+  width: auto;
+}
+
+.sidebar > .language-toggle {
+  align-self: flex-start;
+  margin: -14px 6px 14px;
+  border-color: #494943;
+  background: #30302c;
 }
 
 .auth-card h1 {
@@ -1274,6 +1323,7 @@ select:focus {
 .stage-denied .runtime-process-node,
 .stage-failed .runtime-process-node { background: #d66059; box-shadow: 0 0 0 1px #ecaaa5; }
 .stage-running .runtime-process-node { background: #7966df; box-shadow: 0 0 0 1px #bdb3f0; animation: runtime-process-pulse 1.5s ease-in-out infinite; }
+.stage-waiting .runtime-process-node { background: #d59a32; box-shadow: 0 0 0 1px #ead09b; animation: runtime-process-pulse 1.5s ease-in-out infinite; }
 
 .runtime-process-stage > div { min-width: 0; padding: 0 0 13px; }
 .runtime-process-stage header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -1282,6 +1332,7 @@ select:focus {
 .runtime-process-stage p { margin: 4px 0 0; color: #77746d; font-size: 8px; line-height: 1.5; }
 .stage-denied strong,
 .stage-failed strong { color: #a7443f; }
+.stage-waiting strong { color: #8a5b13; }
 .stage-neutral strong { color: #77736c; }
 
 .runtime-process-decisions { margin-top: 8px; display: grid; gap: 5px; }
@@ -1300,6 +1351,7 @@ select:focus {
 .runtime-process-decision code { color: #6d5cc6; font-size: 7px; }
 .runtime-process-decision.decision-allow span { color: #247453; background: #dff4e9; }
 .runtime-process-decision.decision-deny span { color: #a7443f; background: #f9dfdc; }
+.runtime-process-decision.decision-awaiting span { color: #8a5b13; background: #faedcf; }
 
 .access-request-card { margin-top: 14px; margin-bottom: 14px; }
 .access-request-error { margin: 10px 0 0; color: #ff9b94; font-size: 9px; }
@@ -1898,6 +1950,13 @@ select:focus {
   gap: 10px;
 }
 
+.composer-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .composer-footer select {
   width: 118px;
   max-width: min(340px, calc(100% - 54px));
@@ -1912,7 +1971,7 @@ select:focus {
 }
 
 .composer-footer select.has-resource {
-  width: min(340px, calc(100% - 54px));
+  width: min(300px, calc(100% - 54px));
   color: #55459a;
   background: #eeeaff;
 }

@@ -2,6 +2,7 @@ export type AgentStatus = "ready" | "busy" | "stopped" | "error" | "deleted";
 export type AgentScope = "personal" | "group" | "coordinator";
 export type RunStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 export type MiddlewareEvidenceAction =
+  | "resource:list"
   | "resource:read"
   | "resource:process"
   | "resource:disclose"
@@ -220,8 +221,8 @@ export interface AccessRequest {
   requesterHumanId: string;
   ownerUserId: string;
   agentId: string;
-  resourceId: string;
-  action: "disclose" | "forward";
+  resourceId: string | null;
+  action: "list" | "read" | "disclose" | "forward";
   recipientUserId: string;
   runId: string;
   conversationId: string;

@@ -81,10 +81,10 @@ def build():
     c.rect(0, 0, width, height, fill=1, stroke=0)
 
     text(c, "AGENT LAUNCHPAD / BOUNCER MIDDLEWARE", 38, 505, 7, PURPLE, "Helvetica-Bold")
-    text(c, "Read with context. Forward with intent.", 38, 468, 25, INK, "Helvetica-Bold")
+    text(c, "Discover minimally. Read explicitly. Forward precisely.", 38, 468, 25, INK, "Helvetica-Bold")
     text(
         c,
-        "A recipient-bound authorization boundary for agents acting on behalf of humans.",
+        "Progressive, owner-approved capabilities for agents acting on behalf of humans.",
         38,
         445,
         10,
@@ -107,15 +107,15 @@ def build():
     component(c, 48, 270, 169, 78, "Human session", "Alice", "HttpOnly session -> human principal", white)
     component(c, 48, 158, 169, 78, "Evidence UI", "Run trace", "Displays decisions, never secrets", white)
 
-    component(c, 275, 285, 180, 64, "Request boundary", "Fastify API", "Validates session and Runtime token", PURPLE_LIGHT)
+    component(c, 275, 285, 180, 64, "Request boundary", "Fastify API", "Session + approval decisions", PURPLE_LIGHT)
     component(c, 505, 285, 180, 64, "Run orchestration", "AgentService", "Binds human + Agent + Run + recipient", PURPLE_LIGHT)
-    component(c, 275, 170, 180, 76, "Enforcement point", "Bouncer policy", "read / forward / approve", white)
+    component(c, 275, 170, 180, 76, "Enforcement point", "Bouncer policy", "catalog / read / disclose / forward", white)
     component(c, 505, 170, 180, 76, "Durable evidence", "Decision store", "actor + action + target + reason", white)
 
     component(c, 744, 285, 167, 64, "Agent principal", "Case Runtime", "Short-lived scoped credential", RUNTIME)
     text(c, "Case Runtime", 758, 313, 12, white, "Helvetica-Bold")
     text(c, "Short-lived scoped credential", 758, 298, 7.5, HexColor("#D8D2E4"))
-    component(c, 744, 170, 167, 76, "Protected tool", "vault.mjs", "read / forward / request", white)
+    component(c, 744, 170, 167, 76, "Protected tool", "vault.mjs", "list / read / disclose / forward", white)
 
     # Main request path.
     arrow(c, 217, 309, 275, 317)
@@ -134,18 +134,19 @@ def build():
 
     # Outcome strip.
     rounded_box(c, 30, 42, 900, 52, INK, INK, 13)
-    pill(c, "1  READ", 48, 59, GREEN_LIGHT, GREEN)
-    text(c, "ALLOW", 151, 65, 10, HexColor("#78D7AA"), "Helvetica-Bold")
-    text(c, "Attached owner resource", 205, 65, 8, HexColor("#D8D2E4"))
-    text(c, "+", 348, 65, 12, white, "Helvetica-Bold")
-    pill(c, "2  FORWARD", 376, 59, GREEN_LIGHT, GREEN)
-    text(c, "ALLOW", 488, 65, 10, HexColor("#78D7AA"), "Helvetica-Bold")
-    text(c, "Exact human intent", 540, 65, 8, HexColor("#D8D2E4"))
-    pill(c, "3  CROSS-OWNER", 680, 59, RED_LIGHT, RED)
-    text(c, "DENY", 813, 65, 10, HexColor("#EF827B"), "Helvetica-Bold")
-    text(c, "no approval", 858, 65, 7, HexColor("#D8D2E4"))
+    pill(c, "1  CATALOG", 48, 59, GREEN_LIGHT, GREEN)
+    text(c, "ALLOW", 139, 65, 9, HexColor("#78D7AA"), "Helvetica-Bold")
+    text(c, "metadata only", 187, 65, 7.5, HexColor("#D8D2E4"))
+    pill(c, "2  READ", 274, 59, GREEN_LIGHT, GREEN)
+    text(c, "APPROVE", 348, 65, 9, HexColor("#78D7AA"), "Helvetica-Bold")
+    text(c, "exact resource", 412, 65, 7.5, HexColor("#D8D2E4"))
+    pill(c, "3  FORWARD", 500, 59, GREEN_LIGHT, GREEN)
+    text(c, "APPROVE", 596, 65, 9, HexColor("#78D7AA"), "Helvetica-Bold")
+    text(c, "resource + recipient", 660, 65, 7.5, HexColor("#D8D2E4"))
+    pill(c, "4  X-OWNER", 786, 59, RED_LIGHT, RED)
+    text(c, "DENY", 876, 65, 9, HexColor("#EF827B"), "Helvetica-Bold")
 
-    text(c, "Fail closed: Agent output and protected content cannot create a human forward intent.", 38, 15, 7.5, MUTED)
+    text(c, "Fail closed: free text may request approval, but only a trusted owner decision creates capability.", 38, 15, 7.5, MUTED)
     text(c, "POC boundary: local JSON store + disposable container; not production tenant isolation.", 604, 15, 7.5, MUTED)
 
     c.showPage()

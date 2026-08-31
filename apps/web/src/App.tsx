@@ -15,6 +15,7 @@ import { AuthorizationEvidenceWindow } from "./AuthorizationEvidenceWindow";
 import { AccessRequestCard } from "./AccessRequestCard";
 import { MarkdownContent } from "./MarkdownContent";
 import { RuntimeProcessWindow } from "./RuntimeProcessWindow";
+import { LanguageToggle, useI18n } from "./i18n";
 import {
   GroupWorkspace,
   PersonalWorkspace,
@@ -35,12 +36,6 @@ import type {
   SystemInfo,
   User,
 } from "./types";
-
-const starterPrompts = [
-  "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
-  "Inspect this workspace and explain what you would improve first.",
-  "Build a responsive single-page todo app with tests.",
-];
 
 const activeRunStatuses = new Set<AgentRun["status"]>([
   "queued",
@@ -92,19 +87,45 @@ function formatTime(value: string): string {
 }
 
 function StatusPill({ status }: { status: Agent["status"] }) {
+  const { t } = useI18n();
+  const label = status === "ready"
+    ? t("就绪", "Ready")
+    : status === "busy"
+      ? t("运行中", "Busy")
+      : status === "stopped"
+        ? t("已停用", "Stopped")
+        : status === "error"
+          ? t("错误", "Error")
+          : t("已删除", "Deleted");
   return (
     <span className={"status status-" + status}>
       <span className="status-dot" />
-      {status}
+      {label}
     </span>
   );
 }
 
 function Spinner() {
-  return <span className="spinner" aria-label="Loading" />;
+  const { t } = useI18n();
+  return <span className="spinner" aria-label={t("加载中", "Loading")} />;
 }
 
 export default function App() {
+  const { t } = useI18n();
+  const starterPrompts = [
+    {
+      label: t("创建一个从示例 JSON 输出天气摘要的 TypeScript CLI。", "Create a small TypeScript CLI that prints a weather summary from sample JSON."),
+      prompt: "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
+    },
+    {
+      label: t("检查这个工作区，并说明最值得优先改进的地方。", "Inspect this workspace and explain what you would improve first."),
+      prompt: "Inspect this workspace and explain what you would improve first.",
+    },
+    {
+      label: t("构建一个带测试的响应式单页待办应用。", "Build a responsive single-page todo app with tests."),
+      prompt: "Build a responsive single-page todo app with tests.",
+    },
+  ];
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -227,9 +248,11 @@ export default function App() {
     ? decisions.filter(
         (decision) =>
           decision.executingAgentId === selected.id &&
-          (decision.action === "resource:read" ||
+          (decision.action === "resource:list" ||
+            decision.action === "resource:read" ||
             decision.action === "resource:process" ||
             decision.action === "resource:disclose" ||
+            decision.action === "resource:forward" ||
             decision.action === "grant:create" ||
             decision.action === "grant:revoke"),
       ).slice(0, 40)
@@ -244,11 +267,11 @@ export default function App() {
   const runtimeProcessDecisions = runtimeProcessRun
     ? decisions.filter((decision) => decision.runId === runtimeProcessRun.id)
     : [];
-  const runtimeProcessAccessRequest = runtimeProcessRun
+  const runtimeProcessAccessRequests = runtimeProcessRun
     ? accessRequests
         .filter((request) => request.runId === runtimeProcessRun.id)
-        .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0] ?? null
-    : null;
+        .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+    : [];
   const selectedPendingAccessRequests = selected
     ? accessRequests
         .filter((request) => request.agentId === selected.id && request.status === "pending")
@@ -356,6 +379,7 @@ export default function App() {
     setRuntimeProcessRunId(null);
     setShowSettings(false);
     setMessages([]);
+    setAttachedResourceId("");
     if (!selectedId) {
       return;
     }
@@ -477,7 +501,10 @@ export default function App() {
   };
 
   const deleteAgentById = async (agent: Agent) => {
-    if (!window.confirm(`删除 ${agent.name} 的配置？已有对话、任务和项目文件会继续由个人或群组保留。运行中的群任务需要先停止。`)) {
+    if (!window.confirm(t(
+      `删除 ${agent.name} 的配置？已有对话、任务和项目文件会继续由个人或群组保留。运行中的群任务需要先停止。`,
+      `Delete ${agent.name}'s configuration? Existing conversations, tasks, and project files remain owned by their person or group. Running group tasks must be stopped first.`,
+    ))) {
       return;
     }
     setBusy(true);
@@ -590,7 +617,7 @@ export default function App() {
       setAuthInput("");
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 401) {
-        setError("The access token is not valid.");
+        setError(t("访问令牌无效。", "The access token is not valid."));
       } else {
         setError(reason instanceof Error ? reason.message : String(reason));
       }
@@ -818,9 +845,10 @@ export default function App() {
     return (
       <main className="auth-screen">
         <section className="auth-card" aria-live="polite">
+          <LanguageToggle />
           <div className="brand-mark">A</div>
           <span className="eyebrow">Agent Launchpad</span>
-          <h1>Connecting to the control plane</h1>
+          <h1>{t("正在连接控制面", "Connecting to the control plane")}</h1>
           {error ? <div className="error-banner" role="alert">{error}</div> : <Spinner />}
         </section>
       </main>
@@ -831,13 +859,14 @@ export default function App() {
     return (
       <main className="auth-screen">
         <form className="auth-card" onSubmit={unlock}>
+          <LanguageToggle />
           <div className="brand-mark">A</div>
           <span className="eyebrow">Agent Launchpad</span>
-          <h1>Enter the access token</h1>
-          <p>This shared demo token is configured by the platform operator.</p>
+          <h1>{t("输入访问令牌", "Enter the access token")}</h1>
+          <p>{t("共享演示令牌由平台管理员配置。", "This shared demo token is configured by the platform operator.")}</p>
           {error && <div className="error-banner" role="alert">{error}</div>}
           <label>
-            Access token
+            {t("访问令牌", "Access token")}
             <input
               autoFocus
               type="password"
@@ -848,7 +877,7 @@ export default function App() {
             />
           </label>
           <button className="button button-primary" disabled={busy || !authInput.trim()}>
-            {busy ? <Spinner /> : "Open Launchpad"}
+            {busy ? <Spinner /> : t("打开 Launchpad", "Open Launchpad")}
           </button>
         </form>
       </main>
@@ -859,9 +888,10 @@ export default function App() {
     return (
       <main className="auth-screen">
         <section className="auth-card" aria-live="polite">
+          <LanguageToggle />
           <div className="brand-mark">A</div>
           <span className="eyebrow">Bouncer control plane</span>
-          <h1>Checking your session</h1>
+          <h1>{t("正在检查会话", "Checking your session")}</h1>
           {error ? <div className="error-banner" role="alert">{error}</div> : <Spinner />}
         </section>
       </main>
@@ -872,13 +902,14 @@ export default function App() {
     return (
       <main className="auth-screen">
         <form className="auth-card" onSubmit={login}>
+          <LanguageToggle />
           <div className="brand-mark">A</div>
           <span className="eyebrow">Agent Launchpad · Track B</span>
-          <h1>Choose a real identity</h1>
-          <p>Authorization is evaluated from this signed-in identity, never from Agent input.</p>
+          <h1>{t("选择真实身份", "Choose a real identity")}</h1>
+          <p>{t("所有授权均基于当前登录身份判定，绝不信任 Agent 输入。", "Authorization is evaluated from this signed-in identity, never from Agent input.")}</p>
           {error && <div className="error-banner" role="alert">{error}</div>}
           <label>
-            Username
+            {t("用户名", "Username")}
             <input
               autoFocus
               value={username}
@@ -889,7 +920,7 @@ export default function App() {
             />
           </label>
           <label>
-            Password
+            {t("密码", "Password")}
             <input
               type="password"
               value={password}
@@ -900,10 +931,10 @@ export default function App() {
             />
           </label>
           <button className="button button-primary" disabled={busy}>
-            {busy ? <Spinner /> : "Sign in"}
+            {busy ? <Spinner /> : t("登录", "Sign in")}
           </button>
           <div className="demo-account-note">
-            Demo users: alice, bob, carol, david, emma · default password: launchpad-demo
+            {t("演示用户：alice、bob、carol、david、emma · 默认密码：launchpad-demo", "Demo users: alice, bob, carol, david, emma · default password: launchpad-demo")}
           </div>
         </form>
       </main>
@@ -924,21 +955,22 @@ export default function App() {
             </span>
           </div>
         </div>
+        <LanguageToggle compact />
 
         <nav className="primary-nav">
-          <div className="sidebar-mode-tabs" aria-label="主要空间">
-            <button className={!(view === "personal" && personalSection === "knowledge") ? "selected" : ""} onClick={() => { setPersonalSection("conversations"); setView("personal"); }}>聊天</button>
-            <button className={view === "personal" && personalSection === "knowledge" ? "selected" : ""} onClick={() => { setPersonalSection("knowledge"); setView("personal"); }}>我的知识库</button>
+          <div className="sidebar-mode-tabs" aria-label={t("主要空间", "Main spaces")}>
+            <button className={!(view === "personal" && personalSection === "knowledge") ? "selected" : ""} onClick={() => { setPersonalSection("conversations"); setView("personal"); }}>{t("聊天", "Chats")}</button>
+            <button className={view === "personal" && personalSection === "knowledge" ? "selected" : ""} onClick={() => { setPersonalSection("knowledge"); setView("personal"); }}>{t("我的知识库", "My knowledge")}</button>
           </div>
           {!(view === "personal" && personalSection === "knowledge") && <>
-            <div className="sidebar-chat-heading"><span>聊天</span><button onClick={() => setCreateMenuOpen((current) => !current)} title="创建">{createMenuOpen ? "×" : "＋"}</button></div>
+            <div className="sidebar-chat-heading"><span>{t("聊天", "Chats")}</span><button onClick={() => setCreateMenuOpen((current) => !current)} title={t("创建", "Create")}>{createMenuOpen ? "×" : "＋"}</button></div>
             {createMenuOpen && <div className="sidebar-create-menu">
-              <button onClick={() => { setCreateMenuOpen(false); openPersonalAgentCreate(); }}><span>◇</span><strong>创建个人 Agent</strong></button>
-              <button onClick={() => { setCreateMenuOpen(false); setShowCreateGroup(true); }}><span>◎</span><strong>创建群聊</strong></button>
-              <button onClick={() => { setCreateMenuOpen(false); setPersonalSection("agents"); setView("personal"); }}><span>⚙</span><strong>管理 Agents</strong></button>
+              <button onClick={() => { setCreateMenuOpen(false); openPersonalAgentCreate(); }}><span>◇</span><strong>{t("创建个人 Agent", "Create personal Agent")}</strong></button>
+              <button onClick={() => { setCreateMenuOpen(false); setShowCreateGroup(true); }}><span>◎</span><strong>{t("创建群聊", "Create group chat")}</strong></button>
+              <button onClick={() => { setCreateMenuOpen(false); setPersonalSection("agents"); setView("personal"); }}><span>⚙</span><strong>{t("管理 Agents", "Manage Agents")}</strong></button>
             </div>}
-            <div className="sidebar-chat-filters" aria-label="聊天分类">
-              {([['all', '全部'], ['human', '个人'], ['agent', 'Agent'], ['group', '群聊']] as const).map(([id, label]) => <button key={id} className={conversationFilter === id ? "selected" : ""} onClick={() => setConversationFilter(id)}>{label}</button>)}
+            <div className="sidebar-chat-filters" aria-label={t("聊天分类", "Chat categories")}>
+              {([['all', t('全部', 'All')], ['human', t('个人', 'People')], ['agent', 'Agent'], ['group', t('群聊', 'Groups')]] as const).map(([id, label]) => <button key={id} className={conversationFilter === id ? "selected" : ""} onClick={() => setConversationFilter(id)}>{label}</button>)}
             </div>
             <div className="sidebar-flat-chat-list">
             {sidebarChats.map((item) => {
@@ -947,32 +979,32 @@ export default function App() {
                 const active = conversation.peerType === "human"
                   ? view === "human-chat" && selectedHumanPeerId === conversation.peerId
                   : view === "agent" && selectedId === conversation.peerId;
-                return <button key={item.id} className={active ? "selected" : ""} onClick={() => openDirectConversation(conversation)}><span className={conversation.peerType}>{conversation.title.slice(0, 1).toUpperCase()}</span><strong>{conversation.title}</strong><em>{conversation.peerType === "human" ? "个人" : "Agent"}</em></button>;
+                return <button key={item.id} className={active ? "selected" : ""} onClick={() => openDirectConversation(conversation)}><span className={conversation.peerType}>{conversation.title.slice(0, 1).toUpperCase()}</span><strong>{conversation.title}</strong><em>{conversation.peerType === "human" ? t("个人", "Person") : "Agent"}</em></button>;
               }
               const group = item.group;
               const expanded = expandedGroupIds.includes(group.id);
               const tasks = groupTasks[group.id] ?? [];
               return <div className="sidebar-group-node flat" key={item.id}>
                 <div className={`sidebar-group-row ${view === "group" && activeGroupId === group.id ? "selected" : ""}`}>
-                  <button className="sidebar-group-main" onClick={() => openGroup(group.id)}><span>{group.name.slice(0, 1).toUpperCase()}</span><strong>{group.name}</strong><em>群聊</em></button>
+                  <button className="sidebar-group-main" onClick={() => openGroup(group.id)}><span>{group.name.slice(0, 1).toUpperCase()}</span><strong>{group.name}</strong><em>{t("群聊", "Group")}</em></button>
                   <div className="sidebar-group-actions">
-                    <button onClick={() => createGroupTask(group.id)} aria-label={`在 ${group.name} 新建任务`} title="新建任务">＋</button>
-                    <button onClick={() => toggleGroupTasks(group.id)} aria-label={expanded ? `收起 ${group.name} 的任务` : `展开 ${group.name} 的任务`}>{expanded ? "▾" : "›"}</button>
+                    <button onClick={() => createGroupTask(group.id)} aria-label={t(`在 ${group.name} 新建任务`, `Create a task in ${group.name}`)} title={t("新建任务", "New task")}>＋</button>
+                    <button onClick={() => toggleGroupTasks(group.id)} aria-label={expanded ? t(`收起 ${group.name} 的任务`, `Collapse ${group.name} tasks`) : t(`展开 ${group.name} 的任务`, `Expand ${group.name} tasks`)}>{expanded ? "▾" : "›"}</button>
                   </div>
                 </div>
-                {expanded && <div className="sidebar-task-list">{tasks.map((task) => <button key={task.id} className={view === "group" && activeGroupId === group.id && selectedTaskId === task.id ? "selected" : ""} onClick={() => openGroupTask(group.id, task.id)}><span>└</span><strong>{task.title}</strong><em>{task.status === "completed" ? "完成" : task.status === "running" ? "运行中" : "进行中"}</em></button>)}{tasks.length === 0 && <small>暂无任务</small>}</div>}
+                {expanded && <div className="sidebar-task-list">{tasks.map((task) => <button key={task.id} className={view === "group" && activeGroupId === group.id && selectedTaskId === task.id ? "selected" : ""} onClick={() => openGroupTask(group.id, task.id)}><span>└</span><strong>{task.title}</strong><em>{task.status === "completed" ? t("完成", "Done") : task.status === "running" ? t("运行中", "Running") : t("进行中", "Active")}</em></button>)}{tasks.length === 0 && <small>{t("暂无任务", "No tasks")}</small>}</div>}
               </div>;
             })}
-            {sidebarChats.length === 0 && <small className="sidebar-chat-empty">这个分类还没有聊天。</small>}
+            {sidebarChats.length === 0 && <small className="sidebar-chat-empty">{t("这个分类还没有聊天。", "No chats in this category yet.")}</small>}
             </div>
           </>}
         </nav>
 
         <div className="runtime-card">
           <span className="eyebrow">Runtime</span>
-          <strong>{system?.runtime ?? "Checking…"}</strong>
+          <strong>{system?.runtime ?? t("检查中…", "Checking…")}</strong>
           <span>
-            {system?.arkModel ?? "Ark model not configured"}
+            {system?.arkModel ?? t("未配置 Ark 模型", "Ark model not configured")}
             {system?.containerEngine ? " · " + system.containerEngine : ""}
           </span>
         </div>
@@ -980,9 +1012,9 @@ export default function App() {
           <div className="user-avatar">{currentUser.displayName.slice(0, 1)}</div>
           <div>
             <strong>{currentUser.displayName}</strong>
-            <span>@{currentUser.username} · verified session</span>
+            <span>@{currentUser.username} · {t("已验证会话", "verified session")}</span>
           </div>
-          <button onClick={() => void logout()} disabled={busy} title="Sign out">↪</button>
+          <button onClick={() => void logout()} disabled={busy} title={t("退出登录", "Sign out")}>↪</button>
         </div>
       </aside>
 
@@ -991,13 +1023,13 @@ export default function App() {
           <div className="config-banner">
             <span>!</span>
             <div>
-              <strong>Runtime configuration needed</strong>
+              <strong>{t("需要配置 Runtime", "Runtime configuration needed")}</strong>
               <p>
                 {!system?.arkConfigured
-                  ? "Set ARK_API_KEY and ARK_MODEL in .env before using the Playground."
+                  ? t("使用 Playground 前，请在 .env 中设置 ARK_API_KEY 和 ARK_MODEL。", "Set ARK_API_KEY and ARK_MODEL in .env before using the Playground.")
                   : system.runtimeProvider === "container"
-                    ? "The local container engine or Agent Runtime image is unavailable. Rerun npm run poc."
-                    : "Codex CLI was not found. Use the Docker image or install @openai/codex."}
+                    ? t("本地容器引擎或 Agent Runtime 镜像不可用，请重新运行 npm run poc。", "The local container engine or Agent Runtime image is unavailable. Rerun npm run poc.")
+                    : t("未找到 Codex CLI，请使用 Docker 镜像或安装 @openai/codex。", "Codex CLI was not found. Use the Docker image or install @openai/codex.")}
               </p>
             </div>
           </div>
@@ -1098,11 +1130,11 @@ export default function App() {
                   <h1>{selected.name}</h1>
                   <StatusPill status={selected.status} />
                   <span className="scope-pill">
-                    {selected.scope === "personal" ? "Personal" : selectedGroup?.name ?? "Group"}
+                    {selected.scope === "personal" ? t("个人", "Personal") : selectedGroup?.name ?? t("群组", "Group")}
                   </span>
                 </div>
                 <p>
-                  {selected.role} · {selected.description || "在当前对话或任务的受限目录中运行。"}
+                  {selected.role} · {selected.description || t("在当前对话或任务的受限目录中运行。", "Runs inside the restricted directory for the current conversation or task.")}
                 </p>
               </div>
               <div className="header-actions">
@@ -1115,7 +1147,7 @@ export default function App() {
                     );
                   }}
                 >
-                  权限证据
+                  {t("权限证据", "Authorization evidence")}
                   {selectedAgentDecisions.length > 0 && <span>{selectedAgentDecisions.length}</span>}
                 </button>
                 {(activeRun ?? runs[0]) && (
@@ -1127,7 +1159,7 @@ export default function App() {
                     }}
                   >
                     <i className={activeRun && activeRunStatuses.has(activeRun.status) ? "is-live" : ""} />
-                    后端过程
+                    {t("后端过程", "Backend trace")}
                   </button>
                 )}
                 {canManageSelectedAgent && <><button
@@ -1135,21 +1167,21 @@ export default function App() {
                   onClick={() => setShowSettings((value) => !value)}
                   disabled={busy || selected.status === "busy"}
                 >
-                  编辑配置
+                  {t("编辑配置", "Edit configuration")}
                 </button>
                 <button
                   className="button button-ghost"
                   onClick={toggleAgent}
                   disabled={busy}
                 >
-                  {selected.status === "stopped" ? "启用" : "停用"}
+                  {selected.status === "stopped" ? t("启用", "Enable") : t("停用", "Disable")}
                 </button>
                 <button
                   className="button button-danger"
                   onClick={deleteAgent}
                   disabled={busy || selected.status === "busy"}
                 >
-                  删除
+                  {t("删除", "Delete")}
                 </button></>}
               </div>
             </header>
@@ -1158,14 +1190,14 @@ export default function App() {
               <form className="settings-panel" onSubmit={saveAgent}>
                 <div className="settings-title">
                   <div>
-                    <span className="eyebrow">Agent 配置</span>
-                    <h2>身份与提示词</h2>
+                    <span className="eyebrow">{t("Agent 配置", "Agent configuration")}</span>
+                    <h2>{t("身份与提示词", "Identity and prompt")}</h2>
                   </div>
                   <button type="button" onClick={() => setShowSettings(false)}>×</button>
                 </div>
                 <div className="form-grid">
                   <label>
-                    名称
+                    {t("名称", "Name")}
                     <input
                       value={form.name}
                       onChange={(event) => setForm({ ...form, name: event.target.value })}
@@ -1174,7 +1206,7 @@ export default function App() {
                     />
                   </label>
                   <label>
-                    角色
+                    {t("角色", "Role")}
                     <input
                       value={form.role}
                       onChange={(event) => setForm({ ...form, role: event.target.value })}
@@ -1183,7 +1215,7 @@ export default function App() {
                   </label>
                 </div>
                 <label>
-                  简介
+                  {t("简介", "Description")}
                   <input
                     value={form.description}
                     onChange={(event) =>
@@ -1193,7 +1225,7 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Agent 提示词
+                  {t("Agent 提示词", "Agent instructions")}
                   <textarea
                     value={form.instructions}
                     onChange={(event) =>
@@ -1204,9 +1236,9 @@ export default function App() {
                   />
                 </label>
                 <div className="panel-footer">
-                  <small>Agent 配置会在每次独立对话或任务运行时注入。</small>
+                  <small>{t("Agent 配置会在每次独立对话或任务运行时注入。", "Agent configuration is injected into each independent conversation or task Run.")}</small>
                   <button className="button button-primary" disabled={busy}>
-                    {busy ? <Spinner /> : "保存修改"}
+                    {busy ? <Spinner /> : t("保存修改", "Save changes")}
                   </button>
                 </div>
               </form>
@@ -1222,16 +1254,15 @@ export default function App() {
                     <div className="welcome-orbit">
                       <div>⌁</div>
                     </div>
-                    <h3>What should {selected.name} build?</h3>
+                    <h3>{t(`${selected.name} 应该构建什么？`, `What should ${selected.name} build?`)}</h3>
                     <p>
-                      The Agent can inspect files, write code, run commands, and continue the
-                      same Codex session across messages.
+                      {t("Agent 可以检查文件、编写代码、运行命令，并在多条消息间延续同一 Codex 会话。", "The Agent can inspect files, write code, run commands, and continue the same Codex session across messages.")}
                     </p>
                     <div className="prompt-grid">
                       {starterPrompts.map((item) => (
-                        <button key={item} onClick={() => setPrompt(item)}>
+                        <button key={item.prompt} onClick={() => setPrompt(item.prompt)}>
                           <span>↗</span>
-                          {item}
+                          {item.label}
                         </button>
                       ))}
                     </div>
@@ -1240,7 +1271,7 @@ export default function App() {
                   messages.map((message) => (
                     <article className={"message message-" + message.role} key={message.id}>
                       <div className="message-meta">
-                        <strong>{message.role === "user" ? "You" : selected.name}</strong>
+                        <strong>{message.role === "user" ? t("你", "You") : selected.name}</strong>
                         <span>{formatTime(message.createdAt)}</span>
                       </div>
                       <MarkdownContent className="message-body" content={message.content} />
@@ -1251,11 +1282,11 @@ export default function App() {
                   <article className="message message-assistant thinking">
                     <div className="message-meta">
                       <strong>{selected.name}</strong>
-                      <span>正在处理当前对话或任务目录</span>
+                      <span>{t("正在处理当前对话或任务目录", "Processing the current conversation or task directory")}</span>
                     </div>
                     <div className="thinking-row">
                       <Spinner />
-                      Codex is reading, editing, or running commands…
+                      {t("Codex 正在读取、编辑或运行命令…", "Codex is reading, editing, or running commands…")}
                     </div>
                   </article>
                 )}
@@ -1276,7 +1307,7 @@ export default function App() {
                 ))}
                 {activeRun?.status === "failed" && (
                   <article className="run-error">
-                    <strong>Run failed</strong>
+                    <strong>{t("Run 失败", "Run failed")}</strong>
                     <span>{activeRun.error}</span>
                   </article>
                 )}
@@ -1295,8 +1326,8 @@ export default function App() {
                   }}
                   placeholder={
                     selected.status === "stopped"
-                      ? "请先启用这个 Agent"
-                      : "输入消息…"
+                      ? t("请先启用这个 Agent", "Enable this Agent first")
+                      : t("输入消息…", "Type a message…")
                   }
                   disabled={
                     selected.status === "stopped" ||
@@ -1306,24 +1337,26 @@ export default function App() {
                   rows={2}
                 />
                 <div className="composer-footer">
-                  {personalResources.length > 0 ? (
-                    <select
-                      className={attachedResourceId ? "has-resource" : ""}
-                      value={attachedResourceId}
-                      onChange={(event) => setAttachedResourceId(event.target.value)}
-                      disabled={
-                        selected.status === "stopped" ||
-                        selected.status === "busy" ||
-                        (activeRun != null && activeRunStatuses.has(activeRun.status))
-                      }
-                      title="附加即表示仅授权该 Agent 在本次运行中读取这份资料"
-                    >
-                      <option value="">＋ 附加资料</option>
-                      {personalResources.map((resource) => (
-                        <option key={resource.id} value={resource.id}>{resource.title}</option>
-                      ))}
-                    </select>
-                  ) : <span />}
+                  <div className="composer-controls">
+                    {personalResources.length > 0 ? (
+                      <select
+                        className={attachedResourceId ? "has-resource" : ""}
+                        value={attachedResourceId}
+                        onChange={(event) => setAttachedResourceId(event.target.value)}
+                        disabled={
+                          selected.status === "stopped" ||
+                          selected.status === "busy" ||
+                          (activeRun != null && activeRunStatuses.has(activeRun.status))
+                        }
+                        title={t("附加即表示仅授权该 Agent 在本次运行中读取这份资料", "Attaching grants this Agent read access to this resource for this Run only")}
+                      >
+                        <option value="">{t("＋ 附加资料", "＋ Attach resource")}</option>
+                        {personalResources.map((resource) => (
+                          <option key={resource.id} value={resource.id}>{resource.title}</option>
+                        ))}
+                      </select>
+                    ) : <span />}
+                  </div>
                   <button
                     className="send-button"
                     disabled={
@@ -1332,7 +1365,7 @@ export default function App() {
                       selected.status === "busy" ||
                       (activeRun != null && activeRunStatuses.has(activeRun.status))
                     }
-                    aria-label="Send message"
+                    aria-label={t("发送消息", "Send message")}
                   >
                     ↑
                   </button>
@@ -1344,8 +1377,8 @@ export default function App() {
           <div className="no-agent">
             <div className="no-agent-art">A</div>
             <span className="eyebrow">Agent Launchpad</span>
-            <h1>Your runtime is ready for an Agent.</h1>
-            <p>创建 Agent 并开始对话；项目文件归个人或群组，而不是归 Agent。</p>
+            <h1>{t("Runtime 已准备好接入 Agent。", "Your runtime is ready for an Agent.")}</h1>
+            <p>{t("创建 Agent 并开始对话；项目文件归个人或群组，而不是归 Agent。", "Create an Agent and start a conversation; project files belong to a person or group, not to the Agent.")}</p>
             <button
               className="button button-primary"
               onClick={() => {
@@ -1353,7 +1386,7 @@ export default function App() {
                 setShowCreate(true);
               }}
             >
-              Create your first Agent
+              {t("创建你的第一个 Agent", "Create your first Agent")}
             </button>
           </div>
         )}
@@ -1379,7 +1412,7 @@ export default function App() {
           currentUser={currentUser}
           run={runtimeProcessRun}
           decisions={runtimeProcessDecisions}
-          accessRequest={runtimeProcessAccessRequest}
+          accessRequests={runtimeProcessAccessRequests}
           onClose={() => setRuntimeProcessRunId(null)}
           onRefresh={() => void Promise.all([
             api.run(runtimeProcessRun.id).then(({ run }) => {
@@ -1400,21 +1433,21 @@ export default function App() {
           >
             <div className="modal-heading">
               <div>
-                <span className="eyebrow">新的 Agent 身份</span>
-                <h2>创建{form.scope === "group" ? "群组" : "个人"} Agent</h2>
-                <p>Agent 拥有独立运行线程；文件属于个人/群组下的对话或任务项目。</p>
+                <span className="eyebrow">{t("新的 Agent 身份", "New Agent identity")}</span>
+                <h2>{form.scope === "group" ? t("创建群组 Agent", "Create group Agent") : t("创建个人 Agent", "Create personal Agent")}</h2>
+                <p>{t("Agent 拥有独立运行线程；文件属于个人/群组下的对话或任务项目。", "Agents have independent runtime threads; files belong to conversation or task projects owned by a person or group.")}</p>
               </div>
               <button type="button" onClick={() => setShowCreate(false)}>×</button>
             </div>
             <div className="ownership-context">
-              <span>{form.scope === "group" ? "群组边界" : "个人边界"}</span>
-              <div><strong>{form.scope === "group" ? groups.find((group) => group.id === form.groupId)?.name ?? "未知群组" : currentUser.displayName}</strong><small>{form.scope === "group" ? "只有本群成员可以使用，不能跨群读取资源" : "只有你可以使用，需要同意后才能读取我的知识库"}</small></div>
+              <span>{form.scope === "group" ? t("群组边界", "Group boundary") : t("个人边界", "Personal boundary")}</span>
+              <div><strong>{form.scope === "group" ? groups.find((group) => group.id === form.groupId)?.name ?? t("未知群组", "Unknown group") : currentUser.displayName}</strong><small>{form.scope === "group" ? t("只有本群成员可以使用，不能跨群读取资源", "Only group members may use it; resources cannot be read across groups") : t("只有你可以使用，需要同意后才能读取我的知识库", "Only you may use it; reading your knowledge requires approval")}</small></div>
             </div>
             <label>
-              Name
+              {t("名称", "Name")}
               <input
                 autoFocus
-                placeholder="Frontend Builder"
+                placeholder={t("前端构建助手", "Frontend Builder")}
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
                 required
@@ -1422,9 +1455,9 @@ export default function App() {
               />
             </label>
             <label>
-              Role
+              {t("角色", "Role")}
               <input
-                placeholder="Product Manager, Designer, Engineer…"
+                placeholder={t("产品经理、设计师、工程师…", "Product Manager, Designer, Engineer…")}
                 value={form.role}
                 onChange={(event) => setForm({ ...form, role: event.target.value })}
                 required
@@ -1432,9 +1465,9 @@ export default function App() {
               />
             </label>
             <label>
-              Description
+              {t("简介", "Description")}
               <input
-                placeholder="Builds polished React prototypes"
+                placeholder={t("构建精致的 React 原型", "Builds polished React prototypes")}
                 value={form.description}
                 onChange={(event) =>
                   setForm({ ...form, description: event.target.value })
@@ -1443,7 +1476,7 @@ export default function App() {
               />
             </label>
             <label>
-              Instructions
+              {t("提示词", "Instructions")}
               <textarea
                 value={form.instructions}
                 onChange={(event) =>
@@ -1459,13 +1492,13 @@ export default function App() {
                 className="button button-ghost"
                 onClick={() => setShowCreate(false)}
               >
-                取消
+                {t("取消", "Cancel")}
               </button>
               <button
                 className="button button-primary"
                 disabled={busy || form.scope === "group" && !form.groupId}
               >
-                {busy ? <Spinner /> : "创建 Agent"}
+                {busy ? <Spinner /> : t("创建 Agent", "Create Agent")}
               </button>
             </div>
           </form>
@@ -1477,15 +1510,15 @@ export default function App() {
           <form className="modal resource-modal" onSubmit={createResource} onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-heading">
               <div>
-                <span className="eyebrow">{resourceForm.scope === "private" ? "我的知识库" : "群组知识库"}</span>
-                <h2>新建资料</h2>
-                <p>{resourceForm.scope === "private" ? "默认只有你本人可见，Agent 需要获得授权。" : "群成员可见，同群 Agent 可按策略读取。"}</p>
+                <span className="eyebrow">{resourceForm.scope === "private" ? t("我的知识库", "My knowledge") : t("群组知识库", "Group knowledge")}</span>
+                <h2>{t("新建资料", "New resource")}</h2>
+                <p>{resourceForm.scope === "private" ? t("默认只有你本人可见，Agent 需要获得授权。", "Visible only to you by default; Agents require authorization.") : t("群成员可见，同群 Agent 可按策略读取。", "Visible to group members; same-group Agents may read it under policy.")}</p>
               </div>
               <button type="button" onClick={() => setShowCreateResource(false)}>×</button>
             </div>
-            <label>标题<input autoFocus value={resourceForm.title} onChange={(event) => setResourceForm({ ...resourceForm, title: event.target.value })} required maxLength={200} /></label>
-            <label>正文<textarea value={resourceForm.content} onChange={(event) => setResourceForm({ ...resourceForm, content: event.target.value })} required rows={12} maxLength={100_000} /></label>
-            <div className="modal-footer"><button type="button" className="button button-ghost" onClick={() => setShowCreateResource(false)}>取消</button><button className="button button-primary" disabled={busy || !resourceForm.title.trim() || !resourceForm.content.trim()}>{busy ? <Spinner /> : "保存资料"}</button></div>
+            <label>{t("标题", "Title")}<input autoFocus value={resourceForm.title} onChange={(event) => setResourceForm({ ...resourceForm, title: event.target.value })} required maxLength={200} /></label>
+            <label>{t("正文", "Content")}<textarea value={resourceForm.content} onChange={(event) => setResourceForm({ ...resourceForm, content: event.target.value })} required rows={12} maxLength={100_000} /></label>
+            <div className="modal-footer"><button type="button" className="button button-ghost" onClick={() => setShowCreateResource(false)}>{t("取消", "Cancel")}</button><button className="button button-primary" disabled={busy || !resourceForm.title.trim() || !resourceForm.content.trim()}>{busy ? <Spinner /> : t("保存资料", "Save resource")}</button></div>
           </form>
         </div>
       )}
@@ -1494,19 +1527,19 @@ export default function App() {
         <div className="modal-backdrop" onMouseDown={() => setSelectedResourceId(null)}>
           <section className="modal resource-detail-modal" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-heading">
-              <div><span className="eyebrow">{selectedResource.scope === "private" ? "私人资料" : "群组资料"}</span><h2>{selectedResource.title}</h2><p>创建于 {new Date(selectedResource.createdAt).toLocaleString()}</p></div>
+              <div><span className="eyebrow">{selectedResource.scope === "private" ? t("私人资料", "Private resource") : t("群组资料", "Group resource")}</span><h2>{selectedResource.title}</h2><p>{t("创建于", "Created")} {new Date(selectedResource.createdAt).toLocaleString()}</p></div>
               <button type="button" onClick={() => setSelectedResourceId(null)}>×</button>
             </div>
             <article className="resource-full-content">{selectedResource.content}</article>
             {selectedResource.scope === "private" && selectedResource.ownerUserId === currentUser.id && (
               <section className="grant-manager">
-                <div><span className="eyebrow">Agent 授权</span><h3>按用途授权</h3><p>个人 Agent 可读取；群组 Agent 在指定任务中只能密封处理，不能把原文披露给其他成员。</p></div>
+                <div><span className="eyebrow">{t("Agent 授权", "Agent authorization")}</span><h3>{t("按用途授权", "Purpose-bound access")}</h3><p>{t("个人 Agent 可读取；群组 Agent 在指定任务中只能密封处理，不能把原文披露给其他成员。", "Personal Agents may read; group Agents may only perform sealed processing in a specified task and cannot disclose source text to other members.")}</p></div>
                 {personalGrantAgents.length > 0 ? (
-                  <div className="grant-create-row"><select value={grantAgentId} onChange={(event) => setGrantAgentId(event.target.value)}>{personalGrantAgents.map((agent) => <option value={agent.id} key={agent.id}>{agent.name} · {agent.role}</option>)}</select><button className="button button-primary" onClick={() => void grantSelectedResource()} disabled={busy || !grantAgentId}>授权读取</button></div>
-                ) : <p className="grant-empty">先创建一个个人 Agent，才能授予读取权限。</p>}
+                  <div className="grant-create-row"><select value={grantAgentId} onChange={(event) => setGrantAgentId(event.target.value)}>{personalGrantAgents.map((agent) => <option value={agent.id} key={agent.id}>{agent.name} · {agent.role}</option>)}</select><button className="button button-primary" onClick={() => void grantSelectedResource()} disabled={busy || !grantAgentId}>{t("授权读取", "Grant read")}</button></div>
+                ) : <p className="grant-empty">{t("先创建一个个人 Agent，才能授予读取权限。", "Create a personal Agent before granting read access.")}</p>}
                 {taskGrantTargets.length > 0 ? (
-                  <div className="grant-create-row"><select value={taskGrantTarget} onChange={(event) => setTaskGrantTarget(event.target.value)}>{taskGrantTargets.map(({ task, agent, value }) => <option value={value} key={value}>{task.title} → {agent.name}</option>)}</select><button className="button button-primary" onClick={() => void grantSelectedResourceForTask()} disabled={busy || !taskGrantTarget}>授权任务内处理</button></div>
-                ) : <p className="grant-empty">创建一个包含群组 Agent 的进行中任务后，可授权其处理资料但不披露原文。</p>}
+                  <div className="grant-create-row"><select value={taskGrantTarget} onChange={(event) => setTaskGrantTarget(event.target.value)}>{taskGrantTargets.map(({ task, agent, value }) => <option value={value} key={value}>{task.title} → {agent.name}</option>)}</select><button className="button button-primary" onClick={() => void grantSelectedResourceForTask()} disabled={busy || !taskGrantTarget}>{t("授权任务内处理", "Grant task processing")}</button></div>
+                ) : <p className="grant-empty">{t("创建一个包含群组 Agent 的进行中任务后，可授权其处理资料但不披露原文。", "Create an active task with a group Agent to authorize sealed processing without source disclosure.")}</p>}
                 <div className="grant-list">
                   {selectedResourceGrants.map((grant) => {
                     const agent = agents.find((item) => item.id === grant.granteeAgentId);
@@ -1519,14 +1552,14 @@ export default function App() {
                     const active = grant.revokedAt === null &&
                       (!grant.expiresAt || new Date(grant.expiresAt) > new Date()) &&
                       runStillActive;
-                    return <article key={grant.id}><div><strong>{agent?.name ?? "已删除的 Agent"}</strong><small>{grant.action === "process" ? "密封处理" : "读取原文"} · {grant.duration === "persistent" ? "持续授权" : grant.duration === "task" ? "任务授权" : "单次运行授权"} · {active ? "生效中" : "已失效"}</small></div>{active && <button className="button button-danger" onClick={() => void revokeSelectedGrant(grant.id)} disabled={busy}>撤销</button>}</article>;
+                    return <article key={grant.id}><div><strong>{agent?.name ?? t("已删除的 Agent", "Deleted Agent")}</strong><small>{grant.action === "process" ? t("密封处理", "Sealed process") : t("读取原文", "Read source")} · {grant.duration === "persistent" ? t("持续授权", "Persistent") : grant.duration === "task" ? t("任务授权", "Task grant") : t("单次运行授权", "Run grant")} · {active ? t("生效中", "Active") : t("已失效", "Expired")}</small></div>{active && <button className="button button-danger" onClick={() => void revokeSelectedGrant(grant.id)} disabled={busy}>{t("撤销", "Revoke")}</button>}</article>;
                   })}
-                  {selectedResourceGrants.length === 0 && <p className="grant-empty">还没有授予任何 Agent。</p>}
+                  {selectedResourceGrants.length === 0 && <p className="grant-empty">{t("还没有授予任何 Agent。", "No Agent has been granted access yet.")}</p>}
                 </div>
               </section>
             )}
             <section className="resource-access-history">
-              <div><span className="eyebrow">访问记录</span><h3>最近的权限决定</h3></div>
+              <div><span className="eyebrow">{t("访问记录", "Access history")}</span><h3>{t("最近的权限决定", "Recent authorization decisions")}</h3></div>
               {selectedResourceDecisions.length > 0 ? (
                 <div className="resource-decision-list">
                   {selectedResourceDecisions.map((decision) => (
@@ -1537,7 +1570,7 @@ export default function App() {
                     </article>
                   ))}
                 </div>
-              ) : <p className="grant-empty">还没有 Agent 请求过这份资料。</p>}
+              ) : <p className="grant-empty">{t("还没有 Agent 请求过这份资料。", "No Agent has requested this resource yet.")}</p>}
             </section>
           </section>
         </div>
@@ -1547,12 +1580,12 @@ export default function App() {
         <div className="modal-backdrop" onMouseDown={() => setShowCreateGroup(false)}>
           <form className="modal compact-modal" onSubmit={createGroup} onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-heading">
-              <div><span className="eyebrow">新的协作边界</span><h2>创建群组</h2><p>创建者将成为群主。此群的成员、Agent 与资源彼此隔离于其他群。</p></div>
+              <div><span className="eyebrow">{t("新的协作边界", "New collaboration boundary")}</span><h2>{t("创建群组", "Create group")}</h2><p>{t("创建者将成为群主。此群的成员、Agent 与资源彼此隔离于其他群。", "The creator becomes the owner. Members, Agents, and resources in this group are isolated from other groups.")}</p></div>
               <button type="button" onClick={() => setShowCreateGroup(false)}>×</button>
             </div>
-            <label>群组名称<input autoFocus value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="例如：产品研发组" required maxLength={120} /></label>
-            <label>说明<textarea value={groupDescription} onChange={(event) => setGroupDescription(event.target.value)} placeholder="这个群组负责什么？" rows={4} maxLength={500} /></label>
-            <div className="modal-footer"><button type="button" className="button button-ghost" onClick={() => setShowCreateGroup(false)}>取消</button><button className="button button-primary" disabled={busy || !groupName.trim()}>{busy ? <Spinner /> : "创建群组"}</button></div>
+            <label>{t("群组名称", "Group name")}<input autoFocus value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder={t("例如：产品研发组", "e.g. Product Engineering")} required maxLength={120} /></label>
+            <label>{t("说明", "Description")}<textarea value={groupDescription} onChange={(event) => setGroupDescription(event.target.value)} placeholder={t("这个群组负责什么？", "What is this group responsible for?")} rows={4} maxLength={500} /></label>
+            <div className="modal-footer"><button type="button" className="button button-ghost" onClick={() => setShowCreateGroup(false)}>{t("取消", "Cancel")}</button><button className="button button-primary" disabled={busy || !groupName.trim()}>{busy ? <Spinner /> : t("创建群组", "Create group")}</button></div>
           </form>
         </div>
       )}

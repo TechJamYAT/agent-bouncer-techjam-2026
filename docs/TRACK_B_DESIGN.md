@@ -25,6 +25,9 @@ Agent, group, conversation, or resource boundary.
 - Private and group text resources.
 - Explicit private-resource grants and immediate revocation.
 - A central resource policy used by every protected knowledge-read route.
+- Progressive catalog, exact read, and recipient-bound forward requests; only a
+  trusted owner approval can mint the action-specific Run capability. Unattached
+  forwards require catalog confirmation before the forward request.
 - Correlated authorization decisions containing the human, Agent, action,
   resource, result, reason, and request context.
 - The exact required demo: Alice's personal Agent reads an Alice resource after
@@ -116,10 +119,11 @@ workspace.
 
 ## Policy matrix
 
-The protected-data actions in the competition version are `read`, sealed
-`process`, and recipient-facing `disclose`. Resource creation remains a human or
-task-artifact lifecycle operation. Agents cannot edit or delete human-authored
-source documents.
+The protected-data actions in the competition version are metadata-only private
+catalog access, `read`, sealed `process`, raw current-conversation `disclose`,
+and external `forward`. Resource
+creation remains a human or task-artifact lifecycle operation. Agents cannot
+edit or delete human-authored source documents.
 
 | Executing principal | Own private read | Other private read | Own-group read | Other-group read |
 | --- | --- | --- | --- | --- |
@@ -140,6 +144,17 @@ Additional invariants:
   same group and only for one Run or one task.
 - Agent messages can be created only in the conversation that invoked or
   scheduled that Agent.
+- Private-catalog existence is absent from default Agent context. Only the
+  initiating human can approve metadata-only access to their own catalog for the
+  current Run; this approval never grants content access.
+- Exact resource names are blindly resolved. Missing, inaccessible, and
+  nonexistent references have the same Runtime-facing response and never trigger
+  fuzzy fallback or an approval for an arbitrary resource.
+- External transfer requires an authenticated human to confirm one exact owned
+  private resource and one distinct registered recipient. If the resource was not
+  attached, the current Run must first obtain metadata-only catalog approval and
+  confirm the file. The capability is Run-bound, one-time, and cannot be created
+  from chat text, Agent output, or protected content.
 
 ## Human resource management
 

@@ -2,10 +2,9 @@
 
 ## One-sentence story
 
-Bouncer binds an Agent's external data transfer to the human's exact Run,
-resource, and recipient: Alice can send Alice's document to Bob, while prompt
-injection and attempts to obtain Bob's private document are blocked in the
-trusted backend.
+Bouncer turns private-data use into progressive capabilities: metadata discovery,
+exact-resource reading, and recipient-bound forwarding are approved separately,
+while missing references and Bob-owned data fail closed in the trusted backend.
 
 ## Before judging
 
@@ -19,9 +18,10 @@ trusted backend.
 
 ### 0:00–0:25 — State the problem
 
-> An Agent can read useful context without receiving unlimited authority to
-> disclose or forward it. Bouncer treats human intent, Agent execution, resource
-> ownership, and the recipient as separate security inputs.
+> An Agent starts with no private catalog. It may request metadata for the
+> initiating human, then an exact read or forward. An unattached forward must pass
+> through catalog confirmation before its recipient-bound approval. Each approval
+> is action-bound, Run-bound, and independently auditable.
 
 ### 0:25–0:55 — Normal read
 
@@ -36,25 +36,43 @@ resource:read
 Attaching the resource already authorizes this Run to read it; no duplicate
 approval is required.
 
-### 0:55–1:35 — Explicit owner-authorized forward
+### 0:55–1:25 — Catalog then read
 
-Send:
+Start a new Run without an attachment and ask:
+
+```text
+请查看我有哪些资料
+```
+
+Approve the metadata-only catalog card. Point out that it returns titles, kinds,
+and creation times but no content. Then name one exact resource and approve the
+separate read card.
+
+### 1:25–2:00 — Explicit owner-authorized forward
+
+Start a new Run without attaching a resource, then send:
 
 ```text
 把《Alice — Private Interview Notes》发给 bob
 ```
+
+First approve the metadata-only catalog card. After the backend confirms the
+exact file in this Run, approve the second card that names the resource,
+recipient, Agent, and Run. Free-form text created only pending requests, never a
+capability.
 
 Show:
 
 ```text
 POST /api/runtime/resources/forward
 200 ALLOW — USER_INTENT_BOUND_FORWARD
+approval:approve — RESOURCE_OWNER_APPROVED
 ```
 
 Open Alice and Bob's direct conversation. The protected body was delivered by
 the control plane; the Agent received only a delivery receipt.
 
-### 1:35–2:15 — Cross-owner denial
+### 2:00–2:25 — Cross-owner denial
 
 Send:
 
@@ -72,18 +90,23 @@ POST /api/runtime/resources/forward
 Alice cannot approve Bob's data, even when Alice is the intended recipient. No
 approval card is created and no protected body reaches Runtime.
 
-### 2:15–2:40 — Injection boundary
+### 2:25–2:45 — Missing-reference and injection boundary
+
+Name a nonexistent Alice resource. Show `RESOURCE_REFERENCE_UNAVAILABLE`, no
+approval card, and no fuzzy fallback. Then use prepared evidence for a Run where
+protected content attempted to induce a forward.
 
 Use prepared evidence for a Run where protected content attempted to induce a
-forward without a human-authored request:
+forward without a trusted owner approval:
 
 ```text
 403 DENY — HUMAN_FORWARD_INTENT_REQUIRED
 ```
 
-Agent output and protected content cannot mint a human intent capability.
+Free-form text, Agent output, and protected content cannot mint a human intent
+capability.
 
-### 2:40–3:00 — Lifecycle and verification
+### 2:45–3:00 — Lifecycle and verification
 
 Show the permission evidence with human, Agent, Run, resource, recipient, and
 reason code. Show the Run credential and unused intent grant revoked at the end,
@@ -95,18 +118,22 @@ Finish with:
 > low-friction, external transfers are recipient-bound, and another owner's data
 > remains outside the requester's authority.
 
-## Backup: Agent-proposed forward
+## Approval lifecycle
 
-An Agent may call `vault.mjs request-forward` for Alice's own exact resource and
-a registered recipient. The request appears as an approval card in the main
-conversation. Approval resumes the same logical Run with a fresh credential;
-rejection or timeout resumes without delivery. A cross-owner proposal is denied
-before any approval card can be created.
+Catalog, read, disclosure, and forward requests appear as action-specific cards
+in the main conversation. Approval resumes the same logical Run with a fresh
+credential; rejection or timeout resumes without access or delivery. Multiple
+stages may occur in one Run, such as catalog approval followed by forward approval.
 
 ## Go/no-go checklist
 
 - [ ] Alice's attached resource reads without a duplicate confirmation.
-- [ ] Alice's exact resource reaches Bob only after `USER_INTENT_BOUND_FORWARD`.
+- [ ] Catalog approval returns metadata only and does not authorize content.
+- [ ] A named, unattached resource pauses for an exact read approval.
+- [ ] An unattached forward requires catalog approval before its forward card.
+- [ ] A nonexistent title returns `RESOURCE_REFERENCE_UNAVAILABLE` with no card.
+- [ ] Alice's exact resource reaches Bob only after owner approval and
+      `USER_INTENT_BOUND_FORWARD`.
 - [ ] The forward receipt contains no protected body.
 - [ ] Bob's private resource produces `CROSS_OWNER_FORWARD_DENIED` for Alice.
 - [ ] A prose-only promise to call `forward` fails with missing middleware evidence.

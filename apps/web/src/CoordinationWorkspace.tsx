@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { useI18n } from "./i18n";
 import type {
   Agent,
   AgentRun,
@@ -126,6 +127,7 @@ export function CoordinationWorkspace({
   onTaskCreated,
   onRuntimeRunStarted,
 }: CoordinationWorkspaceProps) {
+  const { t } = useI18n();
   const [groupId, setGroupId] = useState(fixedGroupId ?? groups[0]?.id ?? "");
   const [, setSessions] = useState<Array<CoordinationSnapshot["session"]>>([]);
   const [snapshot, setSnapshot] = useState<CoordinationSnapshot | null>(null);
@@ -371,7 +373,10 @@ export function CoordinationWorkspace({
     if (
       decision === "approve" &&
       !window.confirm(
-        `确认把 ${publication.sourceRelativePath} 发布到群组共享区 ${publication.destinationRelativePath}？\n\n将批准哈希 ${publication.sourceSha256.slice(0, 16)}… 对应的确切文件。`,
+        t(
+          `确认把 ${publication.sourceRelativePath} 发布到群组共享区 ${publication.destinationRelativePath}？\n\n将批准哈希 ${publication.sourceSha256.slice(0, 16)}… 对应的确切文件。`,
+          `Publish ${publication.sourceRelativePath} to the group shared area at ${publication.destinationRelativePath}?\n\nThis approves the exact file matching hash ${publication.sourceSha256.slice(0, 16)}….`,
+        ),
       )
     ) return;
     setBusy(true);
@@ -415,13 +420,13 @@ export function CoordinationWorkspace({
         ? {
             kind: "planning",
             agentId: snapshot.session.coordinatorAgentId,
-            name: agents.find((agent) => agent.id === snapshot.session.coordinatorAgentId)?.name ?? "调度 Agent",
+            name: agents.find((agent) => agent.id === snapshot.session.coordinatorAgentId)?.name ?? t("调度 Agent", "Coordinator Agent"),
           }
         : pendingStep
           ? {
               kind: "thinking",
               agentId: pendingStep.agentId,
-              name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? "群组 Agent",
+              name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? t("群组 Agent", "Group Agent"),
             }
           : null,
     );
@@ -642,9 +647,9 @@ export function CoordinationWorkspace({
   };
 
   const agentName = (id: string | null) =>
-    agents.find((agent) => agent.id === id)?.name ?? id ?? "System";
+    agents.find((agent) => agent.id === id)?.name ?? id ?? t("系统", "System");
   const humanName = (id: string | null) =>
-    id === currentUser.id ? currentUser.displayName : id ?? "Human";
+    id === currentUser.id ? currentUser.displayName : id ?? t("用户", "Human");
   const currentSteps = snapshot?.steps.filter(
     (step) => step.planVersion === snapshot.session.planVersion,
   ) ?? [];
@@ -685,13 +690,13 @@ export function CoordinationWorkspace({
     <section className="coordination-workspace">
       <header className="coordination-header">
         <div>
-          <span className="eyebrow">Multi-Agent coordination middleware</span>
-          <h1>Group tasks</h1>
-          <p>Every turn is ordered, versioned, attributable, and checked against the group boundary.</p>
+          <span className="eyebrow">{t("多 Agent 协作中间件", "Multi-Agent coordination middleware")}</span>
+          <h1>{t("群组任务", "Group tasks")}</h1>
+          <p>{t("每轮执行都有顺序、版本和责任主体，并受群组边界检查。", "Every turn is ordered, versioned, attributable, and checked against the group boundary.")}</p>
         </div>
         {!fixedGroupId && (
           <label>
-            Group
+            {t("群组", "Group")}
             <select value={groupId} onChange={(event) => setGroupId(event.target.value)}>
               {groups.map((group) => (
                 <option value={group.id} key={group.id}>{group.name}</option>
@@ -704,26 +709,26 @@ export function CoordinationWorkspace({
       <div className="coordination-grid">
         <aside className="task-sidebar">
           {showTaskCreate ? <form className="task-create" onSubmit={createTask}>
-            <span className="eyebrow">新的子任务</span>
+            <span className="eyebrow">{t("新的子任务", "New subtask")}</span>
             <label>
-              Title
+              {t("标题", "Title")}
               <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} />
             </label>
             <label>
-              Objective
+              {t("目标", "Objective")}
               <textarea value={objective} onChange={(event) => setObjective(event.target.value)} rows={4} />
             </label>
             <label>
-              Mode
+              {t("模式", "Mode")}
               <select value={mode} onChange={(event) => setMode(event.target.value as CoordinationMode)}>
-                <option value="manual">Manual · pause after every Agent</option>
-                <option value="automatic">Automatic · continue by itself</option>
+                <option value="manual">{t("人工 · 每个 Agent 后暂停", "Manual · pause after every Agent")}</option>
+                <option value="automatic">{t("自动 · 自行继续", "Automatic · continue by itself")}</option>
               </select>
             </label>
             <label>
-              每轮最大 Agent 调用次数
+              {t("每轮最大 Agent 调用次数", "Maximum Agent calls per round")}
               <input type="number" min={1} max={50} value={maxCallsPerRound} onChange={(event) => setMaxCallsPerRound(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} />
-              <small>计划本身可以更长；达到本轮实际调用额度后，调度 Agent 必须判断是否申请下一轮。</small>
+              <small>{t("计划本身可以更长；达到本轮实际调用额度后，调度 Agent 必须判断是否申请下一轮。", "The plan may be longer; after reaching this round's call allowance, the coordinator Agent must decide whether to request another round.")}</small>
             </label>
             <label className="coordinator-toggle">
               <input
@@ -732,8 +737,8 @@ export function CoordinationWorkspace({
                 onChange={(event) => setCoordinatorEnabled(event.target.checked)}
               />
               <span>
-                <strong>启用调度 Agent（推荐）</strong>
-                <small>调度 Agent 可以制定更长的完整计划；每实际执行 {maxCallsPerRound} 次 Agent 后必须申请下一轮。</small>
+                <strong>{t("启用调度 Agent（推荐）", "Enable coordinator Agent (recommended)")}</strong>
+                <small>{t(`调度 Agent 可以制定更长的完整计划；每实际执行 ${maxCallsPerRound} 次 Agent 后必须申请下一轮。`, `The coordinator Agent may create a longer plan; it must request another round after every ${maxCallsPerRound} actual Agent calls.`)}</small>
               </span>
             </label>
             <label className="coordinator-toggle">
@@ -749,14 +754,14 @@ export function CoordinationWorkspace({
                 }}
               />
               <span>
-                <strong>启用 Bouncer 证据契约（演示推荐）</strong>
-                <small>要求同一 Run 真实产生 process=allow 与 disclose=deny；缺失时后端判定步骤失败并允许重试。请选择且只选择一个 Agent。</small>
+                <strong>{t("启用 Bouncer 证据契约（演示推荐）", "Enable Bouncer evidence contract (demo recommended)")}</strong>
+                <small>{t("要求同一 Run 真实产生 process=allow 与 disclose=deny；缺失时后端判定步骤失败并允许重试。请选择且只选择一个 Agent。", "Requires real process=allow and disclose=deny decisions in the same Run. Missing evidence fails the step and enables retry. Select exactly one Agent.")}</small>
               </span>
             </label>
             <fieldset className="context-import-fieldset">
-              <legend>附加群聊历史</legend>
+              <legend>{t("附加群聊历史", "Attach group-chat history")}</legend>
               <label>
-                上下文范围
+                {t("上下文范围", "Context scope")}
                 <select
                   value={contextMode}
                   onChange={(event) => {
@@ -764,21 +769,21 @@ export function CoordinationWorkspace({
                     setSelectedContextEventIds([]);
                   }}
                 >
-                  <option value="none">不附加历史（推荐用于独立任务）</option>
+                  <option value="none">{t("不附加历史（推荐用于独立任务）", "No history (recommended for independent tasks)")}</option>
                   <option value="full" disabled={sourceMessages.length === 0}>
-                    附加全部群聊消息
+                    {t("附加全部群聊消息", "Attach all group-chat messages")}
                   </option>
                   <option value="selected" disabled={sourceMessages.length === 0}>
-                    只附加我勾选的消息
+                    {t("只附加我勾选的消息", "Attach only selected messages")}
                   </option>
                 </select>
               </label>
               {sourceMessages.length === 0 ? (
-                <p>群聊还没有可附加的消息。任务只会收到目标和任务内的新消息。</p>
+                <p>{t("群聊还没有可附加的消息。任务只会收到目标和任务内的新消息。", "The group chat has no messages to attach. The task will receive only its objective and new task messages.")}</p>
               ) : contextMode === "full" ? (
                 <div className="context-import-summary">
-                  <strong>{sourceMessages.length} 条群聊消息</strong>
-                  <span>创建任务时复制快照，之后群聊新增内容不会自动混入。</span>
+                  <strong>{t(`${sourceMessages.length} 条群聊消息`, `${sourceMessages.length} group-chat messages`)}</strong>
+                  <span>{t("创建任务时复制快照，之后群聊新增内容不会自动混入。", "A snapshot is copied when the task is created; later group-chat messages are not added automatically.")}</span>
                 </div>
               ) : contextMode === "selected" ? (
                 <div className="context-message-picker">
@@ -786,7 +791,7 @@ export function CoordinationWorkspace({
                     const checked = selectedContextEventIds.includes(event.id);
                     const actor = event.actorType === "agent"
                       ? agentName(event.actorId)
-                      : event.actorId === currentUser.id ? currentUser.displayName : "群组成员";
+                      : event.actorId === currentUser.id ? currentUser.displayName : t("群组成员", "Group member");
                     return (
                       <label key={event.id}>
                         <input
@@ -804,11 +809,11 @@ export function CoordinationWorkspace({
                   })}
                 </div>
               ) : (
-                <p>不会读取群聊历史；只使用任务目标和任务内后续消息。</p>
+                <p>{t("不会读取群聊历史；只使用任务目标和任务内后续消息。", "Group-chat history will not be read; only the task objective and subsequent task messages are used.")}</p>
               )}
             </fieldset>
             <fieldset>
-              <legend>Participating Agents</legend>
+              <legend>{t("参与的 Agents", "Participating Agents")}</legend>
               {groupAgents.map((agent) => (
                 <label className="agent-check" key={agent.id}>
                   <input
@@ -823,37 +828,37 @@ export function CoordinationWorkspace({
                   <span><strong>{agent.name}</strong>{agent.role}</span>
                 </label>
               ))}
-              {groupAgents.length === 0 && <p>Create a group Agent first.</p>}
+              {groupAgents.length === 0 && <p>{t("请先创建一个群组 Agent。", "Create a group Agent first.")}</p>}
             </fieldset>
             <button
               className="button button-primary"
               disabled={busy || groupAgents.length === 0 || contextSelectionInvalid || bouncerContractInvalid}
             >
-              {busy ? "Creating…" : "Create task"}
+              {busy ? t("创建中…", "Creating…") : t("创建任务", "Create task")}
             </button>
-            <small>Leave all unchecked to include every enabled Agent in the group.</small>
-            <button type="button" className="button button-ghost" onClick={() => setShowTaskCreate(false)}>取消</button>
+            <small>{t("全部不勾选时，将包含群组中所有已启用 Agent。", "Leave all unchecked to include every enabled Agent in the group.")}</small>
+            <button type="button" className="button button-ghost" onClick={() => setShowTaskCreate(false)}>{t("取消", "Cancel")}</button>
           </form> : snapshot ? (
             <div className="task-project-sidebar">
               <div className="panel-heading">
-                <div><span className="eyebrow">Task workspace</span><strong>项目文件</strong></div>
+                <div><span className="eyebrow">{t("任务工作区", "Task workspace")}</span><strong>{t("项目文件", "Project files")}</strong></div>
                 <code>{projectFiles.length}</code>
               </div>
               <div className="project-file-actions compact">
-                <button className="button button-ghost" onClick={() => void refreshProjectFiles(snapshot.session.id).catch((reason) => onError(reason instanceof Error ? reason.message : String(reason)))} disabled={projectBusy}>刷新</button>
-                <button className="button button-primary" onClick={() => void downloadProject()} disabled={projectBusy}>下载 ZIP</button>
+                <button className="button button-ghost" onClick={() => void refreshProjectFiles(snapshot.session.id).catch((reason) => onError(reason instanceof Error ? reason.message : String(reason)))} disabled={projectBusy}>{t("刷新", "Refresh")}</button>
+                <button className="button button-primary" onClick={() => void downloadProject()} disabled={projectBusy}>{t("下载 ZIP", "Download ZIP")}</button>
               </div>
               <div className="project-tree task-project-tree">
-                {projectFiles.length > 0 ? <ProjectTree nodes={projectTree(projectFiles)} selectedPath={selectedProjectFile} onSelect={setSelectedProjectFile} /> : <p>任务目录还没有文件。</p>}
+                {projectFiles.length > 0 ? <ProjectTree nodes={projectTree(projectFiles)} selectedPath={selectedProjectFile} onSelect={setSelectedProjectFile} /> : <p>{t("任务目录还没有文件。", "The task directory has no files yet.")}</p>}
               </div>
             </div>
           ) : (
-            <div className="task-sidebar-empty"><span>⇄</span><strong>从左侧选择任务</strong><small>任务现在归属于对应群组。</small></div>
+            <div className="task-sidebar-empty"><span>⇄</span><strong>{t("从左侧选择任务", "Select a task on the left")}</strong><small>{t("任务现在归属于对应群组。", "Tasks belong to their corresponding group.")}</small></div>
           )}
         </aside>
 
         {showTaskCreate ? (
-          <div className="task-empty"><span>＋</span><h2>创建群任务</h2><p>填写左侧信息；创建后任务会出现在最左侧对应群组下。</p></div>
+          <div className="task-empty"><span>＋</span><h2>{t("创建群任务", "Create group task")}</h2><p>{t("填写左侧信息；创建后任务会出现在最左侧对应群组下。", "Complete the form on the left; the task will appear under its group in the main navigation.")}</p></div>
         ) : snapshot ? (
           <div className="task-detail">
             <div className="task-detail-header">
@@ -866,33 +871,33 @@ export function CoordinationWorkspace({
                 </div>
                 <p>{snapshot.session.objective}</p>
                 <div className="task-context-badge">
-                  <span>附加历史</span>
+                  <span>{t("附加历史", "Attached history")}</span>
                   <strong>
                     {snapshot.session.contextImport?.mode === "full"
-                      ? `全部群聊 · ${snapshot.session.contextImport.messages.length} 条`
+                      ? t(`全部群聊 · ${snapshot.session.contextImport.messages.length} 条`, `Full group chat · ${snapshot.session.contextImport.messages.length} messages`)
                       : snapshot.session.contextImport?.mode === "selected"
-                        ? `已选择 ${snapshot.session.contextImport.messages.length} 条`
-                        : "无"}
+                        ? t(`已选择 ${snapshot.session.contextImport.messages.length} 条`, `${snapshot.session.contextImport.messages.length} selected`)
+                        : t("无", "None")}
                   </strong>
                   {snapshot.session.contextImport?.sourceTitle && (
-                    <small>来自 {snapshot.session.contextImport.sourceTitle}</small>
+                    <small>{t("来自", "From")} {snapshot.session.contextImport.sourceTitle}</small>
                   )}
                 </div>
                 <div className={`task-coordinator-badge ${snapshot.session.coordinatorEnabled ? "enabled" : "disabled"}`}>
-                  <span>调度 Agent</span>
+                  <span>{t("调度 Agent", "Coordinator Agent")}</span>
                   <strong>{snapshot.session.coordinatorEnabled
                     ? snapshot.session.planVersion === 0
-                      ? `已启用 · 等待首次规划（每轮 ${snapshot.session.maxCallsPerRound} 次）`
-                      : `第 ${snapshot.session.currentRound} 轮 · ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound} 次调用`
-                    : "未启用 · 单轮执行"}</strong>
+                      ? t(`已启用 · 等待首次规划（每轮 ${snapshot.session.maxCallsPerRound} 次）`, `Enabled · waiting for first plan (${snapshot.session.maxCallsPerRound} calls per round)`)
+                      : t(`第 ${snapshot.session.currentRound} 轮 · ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound} 次调用`, `Round ${snapshot.session.currentRound} · ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound} calls`)
+                    : t("未启用 · 单轮执行", "Disabled · single-round execution")}</strong>
                 </div>
                 {(snapshot.session.middlewareEvidenceRequirements?.length ?? 0) > 0 && (
                   <div className="task-context-badge">
-                    <span>Bouncer 证据契约</span>
+                    <span>{t("Bouncer 证据契约", "Bouncer evidence contract")}</span>
                     <strong>{snapshot.session.middlewareEvidenceRequirements!
                       .map((requirement) => `${requirement.action.replace("resource:", "")}=${requirement.decision}`)
                       .join(" · ")}</strong>
-                    <small>没有真实后端决策时，本轮不会被标记为完成。</small>
+                    <small>{t("没有真实后端决策时，本轮不会被标记为完成。", "This round cannot complete without real backend decisions.")}</small>
                   </div>
                 )}
               </div>
@@ -902,8 +907,8 @@ export function CoordinationWorkspace({
                   onChange={(event) => void changeMode(event.target.value as CoordinationMode)}
                   disabled={busy || terminal || snapshot.session.status === "running" || interruptionPending || snapshot.session.manualAdvanceRequest?.status === "pending" || snapshot.session.roundExtensionRequest?.status === "pending"}
                 >
-                  <option value="manual">Manual mode</option>
-                  <option value="automatic">Automatic mode</option>
+                  <option value="manual">{t("人工模式", "Manual mode")}</option>
+                  <option value="automatic">{t("自动模式", "Automatic mode")}</option>
                 </select>
                 {snapshot.session.mode === "manual" && !terminal && !interruptionPending && snapshot.session.status !== "failed" && snapshot.session.manualAdvanceRequest?.status !== "pending" && (
                   <button
@@ -917,27 +922,27 @@ export function CoordinationWorkspace({
                     }
                   >
                     {snapshot.session.coordinatorEnabled
-                      ? "调度并执行下一步"
+                      ? t("调度并执行下一步", "Plan and execute next step")
                       : snapshot.session.needsReplan
-                        ? "重新规划并继续"
+                        ? t("重新规划并继续", "Replan and continue")
                       : currentSteps.some((step) => step.status === "pending")
-                        ? "执行下一位 Agent"
-                        : "等待补充信息"}
+                        ? t("执行下一位 Agent", "Run next Agent")
+                        : t("等待补充信息", "Waiting for more context")}
                   </button>
                 )}
                 {snapshot.session.status === "running" && isRoundInitiator && (
                   <button className="button button-danger" onClick={() => void interrupt()} disabled={busy}>
-                    中断当前轮次
+                    {t("中断当前轮次", "Interrupt current round")}
                   </button>
                 )}
                 {snapshot.session.status === "failed" && (
                   <button className="button button-primary" onClick={() => void retry()} disabled={busy}>
-                    Retry failed step
+                    {t("重试失败步骤", "Retry failed step")}
                   </button>
                 )}
                 {!terminal && (
                   <button className="button button-danger" onClick={() => void stop()} disabled={busy}>
-                    Stop
+                    {t("停止", "Stop")}
                   </button>
                 )}
               </div>
@@ -945,16 +950,16 @@ export function CoordinationWorkspace({
 
             {snapshot.session.interruption?.status === "paused" && (
               <section className="round-extension-card" role="alert">
-                <div className="round-extension-heading"><span>⏸</span>当前轮次已中断</div>
-                <p className="round-extension-question">继续当前轮次，还是新开一轮？</p>
-                <p className="round-extension-reason">被中断的 Agent 调用没有计入额度。你可以先在下方补充上下文，再决定如何恢复。</p>
-                <small>继续会保留第 {snapshot.session.currentRound} 轮的调用计数；新开一轮会取消当前计划、轮次加一并把调用次数清零。</small>
+                <div className="round-extension-heading"><span>⏸</span>{t("当前轮次已中断", "Current round interrupted")}</div>
+                <p className="round-extension-question">{t("继续当前轮次，还是新开一轮？", "Continue this round or start a new one?")}</p>
+                <p className="round-extension-reason">{t("被中断的 Agent 调用没有计入额度。你可以先在下方补充上下文，再决定如何恢复。", "The interrupted Agent call did not count toward the allowance. You may add context below before choosing how to resume.")}</p>
+                <small>{t(`继续会保留第 ${snapshot.session.currentRound} 轮的调用计数；新开一轮会取消当前计划、轮次加一并把调用次数清零。`, `Continuing preserves Round ${snapshot.session.currentRound}'s call count; starting a new round cancels the current plan, increments the round, and resets the count.`)}</small>
                 {isRoundInitiator ? (
                   <div className="round-extension-actions">
-                    <button onClick={() => void resolveInterruption("new_round")} disabled={busy}>新开一轮</button>
-                    <button className="allow" onClick={() => void resolveInterruption("continue")} disabled={busy}>继续当前轮次</button>
+                    <button onClick={() => void resolveInterruption("new_round")} disabled={busy}>{t("新开一轮", "Start new round")}</button>
+                    <button className="allow" onClick={() => void resolveInterruption("continue")} disabled={busy}>{t("继续当前轮次", "Continue current round")}</button>
                   </div>
-                ) : <span className="round-extension-waiting">等待发起者选择恢复方式</span>}
+                ) : <span className="round-extension-waiting">{t("等待发起者选择恢复方式", "Waiting for initiator to choose how to resume")}</span>}
               </section>
             )}
 
@@ -963,7 +968,7 @@ export function CoordinationWorkspace({
                 ref={roundPermissionRef}
                 className="round-extension-card"
                 role="alertdialog"
-                aria-label="请求进入下一个 Agent 步骤"
+                aria-label={t("请求进入下一个 Agent 步骤", "Request the next Agent step")}
                 tabIndex={-1}
                 onKeyDown={(event) => {
                   if (busy || snapshot.session.createdByUserId !== currentUser.id) return;
@@ -971,16 +976,16 @@ export function CoordinationWorkspace({
                   if (event.key === "Enter") { event.preventDefault(); void resolveManualAdvance("approve"); }
                 }}
               >
-                <div className="round-extension-heading"><span>✋</span>请求权限</div>
-                <p className="round-extension-question">是否允许进入下一步？</p>
+                <div className="round-extension-heading"><span>✋</span>{t("请求权限", "Permission request")}</div>
+                <p className="round-extension-question">{t("是否允许进入下一步？", "Allow the next step?")}</p>
                 <p className="round-extension-reason">{snapshot.session.manualAdvanceRequest.rationale}</p>
-                <small>等待期间可以继续补充信息；无人补充则执行原计划下一步，有新信息才由调度 Agent 重新规划。</small>
+                <small>{t("等待期间可以继续补充信息；无人补充则执行原计划下一步，有新信息才由调度 Agent 重新规划。", "You may add information while waiting. Without new input, the original next step runs; only new information triggers replanning.")}</small>
                 {snapshot.session.createdByUserId === currentUser.id ? (
                   <div className="round-extension-actions">
-                    <button onClick={() => void resolveManualAdvance("reject")} disabled={busy}>拒绝 <kbd>Esc</kbd></button>
-                    <button className="allow" onClick={() => void resolveManualAdvance("approve")} disabled={busy}>允许下一步 <kbd>↵</kbd></button>
+                    <button onClick={() => void resolveManualAdvance("reject")} disabled={busy}>{t("拒绝", "Deny")} <kbd>Esc</kbd></button>
+                    <button className="allow" onClick={() => void resolveManualAdvance("approve")} disabled={busy}>{t("允许下一步", "Allow next step")} <kbd>↵</kbd></button>
                   </div>
-                ) : <span className="round-extension-waiting">等待任务发起者处理</span>}
+                ) : <span className="round-extension-waiting">{t("等待任务发起者处理", "Waiting for task initiator")}</span>}
               </section>
             )}
 
@@ -989,7 +994,7 @@ export function CoordinationWorkspace({
                 ref={roundPermissionRef}
                 className="round-extension-card"
                 role="alertdialog"
-                aria-label="调度 Agent 请求更多轮次"
+                aria-label={t("调度 Agent 请求更多轮次", "Coordinator Agent requests more rounds")}
                 tabIndex={-1}
                 onKeyDown={(event) => {
                   if (busy || snapshot.session.createdByUserId !== currentUser.id) return;
@@ -997,24 +1002,24 @@ export function CoordinationWorkspace({
                   if (event.key === "Enter") { event.preventDefault(); void resolveRoundExtension("approve"); }
                 }}
               >
-                <div className="round-extension-heading"><span>✋</span>请求权限</div>
-                <p className="round-extension-question">本轮调用额度已用完，是否允许开启下一轮？</p>
+                <div className="round-extension-heading"><span>✋</span>{t("请求权限", "Permission request")}</div>
+                <p className="round-extension-question">{t("本轮调用额度已用完，是否允许开启下一轮？", "This round's call allowance is exhausted. Allow another round?")}</p>
                 <p className="round-extension-reason">{snapshot.session.roundExtensionRequest.rationale}</p>
-                <small>第 {snapshot.session.currentRound} 轮已执行 {snapshot.session.callsInCurrentRound}/{snapshot.session.maxCallsPerRound} 次 Agent 调用。</small>
-                <small>批准后若无人补充新信息，将直接从原调度计划的下一步继续；有新信息时才重新规划。</small>
+                <small>{t(`第 ${snapshot.session.currentRound} 轮已执行 ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound} 次 Agent 调用。`, `Round ${snapshot.session.currentRound} used ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound} Agent calls.`)}</small>
+                <small>{t("批准后若无人补充新信息，将直接从原调度计划的下一步继续；有新信息时才重新规划。", "If approved without new input, execution continues from the next planned step; new input triggers replanning.")}</small>
                 {snapshot.session.createdByUserId === currentUser.id ? (
                   <div className="round-extension-actions">
-                    <button onClick={() => void resolveRoundExtension("reject")} disabled={busy}>拒绝 <kbd>Esc</kbd></button>
-                    <button className="allow" onClick={() => void resolveRoundExtension("approve")} disabled={busy}>允许下一轮 <kbd>↵</kbd></button>
+                    <button onClick={() => void resolveRoundExtension("reject")} disabled={busy}>{t("拒绝", "Deny")} <kbd>Esc</kbd></button>
+                    <button className="allow" onClick={() => void resolveRoundExtension("approve")} disabled={busy}>{t("允许下一轮", "Allow next round")} <kbd>↵</kbd></button>
                   </div>
-                ) : <span className="round-extension-waiting">等待任务发起者处理</span>}
+                ) : <span className="round-extension-waiting">{t("等待任务发起者处理", "Waiting for task initiator")}</span>}
               </section>
             )}
 
             <div className="task-body-grid">
               <div className="shared-conversation">
                 <div className="panel-heading">
-                  <div><span className="eyebrow">Shared session</span><strong>Committed context</strong></div>
+                  <div><span className="eyebrow">{t("共享会话", "Shared session")}</span><strong>{t("已提交上下文", "Committed context")}</strong></div>
                   <code>v{snapshot.session.version} · seq {snapshot.session.lastEventSequence}</code>
                 </div>
                 <div className="coord-events">
@@ -1034,14 +1039,14 @@ export function CoordinationWorkspace({
                         </div>
                         {event.content && <p>{event.content}</p>}
                         {!isMessage && event.type === "step.started" && (
-                          <p>Invoked {agentName(String(event.metadata.agentId))} with context through #{event.metadata.contextThroughSequence}.</p>
+                          <p>{t(`已调用 ${agentName(String(event.metadata.agentId))}，上下文截至 #${event.metadata.contextThroughSequence}。`, `Invoked ${agentName(String(event.metadata.agentId))} with context through #${event.metadata.contextThroughSequence}.`)}</p>
                         )}
-                        {!isMessage && event.type === "step.failed" && <p>{String(event.metadata.error ?? "Step failed")}</p>}
+                        {!isMessage && event.type === "step.failed" && <p>{String(event.metadata.error ?? t("步骤失败", "Step failed"))}</p>}
                         {!isMessage && event.type === "plan.replaced" && event.metadata.rationale && (
-                          <p>调度判断：{String(event.metadata.rationale)}</p>
+                          <p>{t("调度判断：", "Coordinator rationale: ")}{String(event.metadata.rationale)}</p>
                         )}
                         {!isMessage && event.type === "coordinator.decision" && event.content && (
-                          <p>调度判断：{event.content}</p>
+                          <p>{t("调度判断：", "Coordinator rationale: ")}{event.content}</p>
                         )}
                       </article>
                     );
@@ -1050,13 +1055,13 @@ export function CoordinationWorkspace({
                     <article className={`coord-message agent coord-live-activity ${liveActivity.kind}`}>
                       <div>
                         <strong>{liveActivity.name}</strong>
-                        <span>{liveActivity.kind === "planning" ? "正在规划调度" : "正在思考"}</span>
+                        <span>{liveActivity.kind === "planning" ? t("正在规划调度", "Planning coordination") : t("正在思考", "Thinking")}</span>
                       </div>
                       <p className="chat-thinking">
                         <span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span>
                         {liveActivity.kind === "planning"
-                          ? "正在读取最新上下文，并决定本轮调用哪些 Agent 以及执行顺序…"
-                          : "正在读取调用前的完整上下文并生成结果…"}
+                          ? t("正在读取最新上下文，并决定本轮调用哪些 Agent 以及执行顺序…", "Reading the latest context and deciding which Agents to call and in what order…")
+                          : t("正在读取调用前的完整上下文并生成结果…", "Reading the complete pre-call context and generating a result…")}
                       </p>
                     </article>
                   )}
@@ -1066,17 +1071,17 @@ export function CoordinationWorkspace({
                     <textarea
                       value={message}
                       onChange={(event) => setMessage(event.target.value)}
-                      placeholder="Add context. If an Agent is running, the next step will replan after it finishes."
+                      placeholder={t("补充上下文。如果 Agent 正在运行，当前步骤结束后会重新规划下一步。", "Add context. If an Agent is running, the next step will replan after it finishes.")}
                       rows={2}
                     />
-                    <button className="button button-ghost" disabled={busy || !message.trim()}>Send</button>
+                    <button className="button button-ghost" disabled={busy || !message.trim()}>{t("发送", "Send")}</button>
                   </form>
                 )}
               </div>
 
               <aside className="step-panel">
                 <div className="panel-heading">
-                  <div><span className="eyebrow">Current plan</span><strong>Ordered Agent turns</strong></div>
+                  <div><span className="eyebrow">{t("当前计划", "Current plan")}</span><strong>{t("有序 Agent 轮次", "Ordered Agent turns")}</strong></div>
                   <code>plan {snapshot.session.planVersion}</code>
                 </div>
                 <div className="step-list">
@@ -1086,7 +1091,7 @@ export function CoordinationWorkspace({
                       <div>
                         <strong>{agentName(step.agentId)}</strong>
                         <p>{step.instruction}</p>
-                        <small>{step.status} · attempt {step.attempt}</small>
+                        <small>{step.status} · {t("尝试", "attempt")} {step.attempt}</small>
                         {step.error && <em>{step.error}</em>}
                       </div>
                     </article>
@@ -1097,32 +1102,32 @@ export function CoordinationWorkspace({
 
             <section className="task-project-preview-panel">
               {projectBusy && !projectPreview ? (
-                <p>正在读取文件…</p>
+                <p>{t("正在读取文件…", "Reading file…")}</p>
               ) : projectPreview ? (
                 <>
-                  <header><strong>{projectPreview.relativePath}</strong><small>{fileSize(projectPreview.size)}{projectPreview.truncated ? " · 仅预览前 1 MB" : ""}</small></header>
-                  {projectPreview.kind === "text" ? <pre>{projectPreview.content}</pre> : <div className="binary-preview">这是二进制文件，可通过 ZIP 下载。</div>}
+                  <header><strong>{projectPreview.relativePath}</strong><small>{fileSize(projectPreview.size)}{projectPreview.truncated ? t(" · 仅预览前 1 MB", " · first 1 MB only") : ""}</small></header>
+                  {projectPreview.kind === "text" ? <pre>{projectPreview.content}</pre> : <div className="binary-preview">{t("这是二进制文件，可通过 ZIP 下载。", "This is a binary file and can be downloaded in the ZIP archive.")}</div>}
                 </>
               ) : (
-                <p>项目文件位于左侧。选择文件后可在这里预览。</p>
+                <p>{t("项目文件位于左侧。选择文件后可在这里预览。", "Project files are listed on the left. Select one to preview it here.")}</p>
               )}
             </section>
 
             <section className="publication-panel">
               <div className="panel-heading">
                 <div>
-                  <span className="eyebrow">Human approval gate</span>
-                  <strong>任务结果发布</strong>
+                  <span className="eyebrow">{t("人工审批门", "Human approval gate")}</span>
+                  <strong>{t("任务结果发布", "Task result publication")}</strong>
                 </div>
-                <code>{taskPublications.filter((item) => item.status === "pending").length} 待审批</code>
+                <code>{t(`${taskPublications.filter((item) => item.status === "pending").length} 待审批`, `${taskPublications.filter((item) => item.status === "pending").length} pending`)}</code>
               </div>
               <div className="publication-list">
                 {taskPublications.map((publication) => (
                   <article className={`publication-card publication-${publication.status}`} key={publication.id}>
                     <div className="publication-file">
-                      <span>{publication.status === "pending" ? "待审批" : publication.status}</span>
+                      <span>{publication.status === "pending" ? t("待审批", "Pending") : publication.status}</span>
                       <strong>{publication.sourceRelativePath}</strong>
-                      <small>发布到 shared/{publication.destinationRelativePath}</small>
+                      <small>{t("发布到", "Publish to")} shared/{publication.destinationRelativePath}</small>
                     </div>
                     <div className="publication-proof">
                       <code>{publication.sourceSha256.slice(0, 16)}…</code>
@@ -1135,14 +1140,14 @@ export function CoordinationWorkspace({
                           onClick={() => void reviewPublication(publication, "reject")}
                           disabled={busy}
                         >
-                          拒绝
+                          {t("拒绝", "Reject")}
                         </button>
                         <button
                           className="button button-primary"
                           onClick={() => void reviewPublication(publication, "approve")}
                           disabled={busy}
                         >
-                          核对并批准
+                          {t("核对并批准", "Review and approve")}
                         </button>
                       </div>
                     )}
@@ -1150,7 +1155,7 @@ export function CoordinationWorkspace({
                 ))}
                 {taskPublications.length === 0 && (
                   <div className="publication-empty">
-                    Agent 生成的文件仍留在任务目录。只有 Agent 发起发布申请后，才会在这里请求你批准写入群组共享区。
+                    {t("Agent 生成的文件仍留在任务目录。只有 Agent 发起发布申请后，才会在这里请求你批准写入群组共享区。", "Agent-generated files remain in the task directory. This panel asks for approval to write to the group shared area only after an Agent proposes publication.")}
                   </div>
                 )}
               </div>
@@ -1159,8 +1164,8 @@ export function CoordinationWorkspace({
         ) : (
           <div className="task-empty">
             <span>⇄</span>
-            <h2>Create or select a group task</h2>
-            <p>Manual mode pauses between Agents. Automatic mode continues while preserving every committed message.</p>
+            <h2>{t("创建或选择一个群组任务", "Create or select a group task")}</h2>
+            <p>{t("人工模式会在 Agent 之间暂停；自动模式会继续执行，同时保留每条已提交消息。", "Manual mode pauses between Agents. Automatic mode continues while preserving every committed message.")}</p>
           </div>
         )}
       </div>

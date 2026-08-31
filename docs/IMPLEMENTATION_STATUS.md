@@ -54,6 +54,23 @@ Updated 2026-08-28. This file records verified behavior, not aspirational design
 - Optional Bouncer evidence contracts gate task completion on persisted Run-linked
   policy decisions. Missing actions fail the step and use the existing retry flow;
   vault command observations are stored without arguments or output.
+- Private catalogs are absent from default Runtime context. The initiating human
+  may approve metadata-only access to their own titles, kinds, and creation times
+  for one Run; this does not grant content access. Exact references are blindly
+  resolved and missing/inaccessible names fail identically.
+- Unattached exact private resources create owner read requests; approvals issue
+  Run-scoped read grants and resume with a fresh credential. Catalog approval and
+  a later read or forward approval may occur sequentially in one logical Run.
+- Access-request creation atomically moves the Run to `waiting_for_approval`.
+  Fast decisions that arrive before the active Agent turn exits remain queued
+  and resume exactly once. Approved continuations add a final-action evidence
+  contract; if the resumed Agent skips the tool, the trusted control plane
+  fulfills only that exact approved action and passes its result back to the Agent.
+- External transfer capabilities require owner approval of one exact resource and
+  registered recipient. An unattached own resource also requires a prior catalog
+  approval in the same Run; an attached resource may enter forward approval
+  directly. Free-form text, Agent output, and protected content cannot mint the
+  capability; delivery is one-time and performed directly by the control plane.
 - Initial chat entry scrolls to the newest message without pulling a user who has
   scrolled upward back to the bottom.
 

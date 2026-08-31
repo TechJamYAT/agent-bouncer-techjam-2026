@@ -19,6 +19,7 @@ export type AuthorizationAction =
   | "group:manage"
   | "member:manage"
   | "resource:create"
+  | "resource:list"
   | "resource:read"
   | "resource:process"
   | "resource:disclose"
@@ -36,6 +37,7 @@ export type AuthorizationAction =
   | "approval:expire";
 export type AuthorizationDecisionValue = "allow" | "deny";
 export type MiddlewareEvidenceAction =
+  | "resource:list"
   | "resource:read"
   | "resource:process"
   | "resource:disclose"
@@ -314,9 +316,10 @@ export interface ResourceGrant {
 }
 
 /**
- * A capability derived only from a human-authored message at the trusted
- * control-plane boundary. Agent output and protected resource contents cannot
- * create one of these grants.
+ * A capability created only from an authenticated human's structured
+ * confirmation or an explicit owner approval at the trusted control-plane
+ * boundary. Free-form text, Agent output, and protected resource contents
+ * cannot create one of these grants.
  */
 export interface ForwardIntentGrant {
   id: string;
@@ -340,8 +343,8 @@ export interface AccessRequest {
   requesterHumanId: string;
   ownerUserId: string;
   agentId: string;
-  resourceId: string;
-  action: "disclose" | "forward";
+  resourceId: string | null;
+  action: "list" | "read" | "disclose" | "forward";
   recipientUserId: string;
   runId: string;
   conversationId: string;

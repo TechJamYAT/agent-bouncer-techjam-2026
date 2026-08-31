@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { useI18n } from "./i18n";
 import type {
   Agent,
   CoordinationMode,
@@ -37,6 +38,7 @@ export function GroupChat({
   onOpenAgents,
   onActivity,
 }: GroupChatProps) {
+  const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<CoordinationSnapshot | null>(null);
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [draftMode, setDraftMode] = useState<CoordinationMode>("manual");
@@ -126,7 +128,7 @@ export function GroupChat({
       return {
         kind: "thinking",
         agentId: activeStep.agentId,
-        name: agents.find((agent) => agent.id === activeStep.agentId)?.name ?? "群组 Agent",
+        name: agents.find((agent) => agent.id === activeStep.agentId)?.name ?? t("群组 Agent", "Group Agent"),
       };
     }
     if (
@@ -138,7 +140,7 @@ export function GroupChat({
       return {
         kind: "planning",
         agentId: snapshot.session.coordinatorAgentId,
-        name: coordinator?.name ?? "调度 Agent",
+        name: coordinator?.name ?? t("调度 Agent", "Coordinator Agent"),
       };
     }
     return optimisticActivity;
@@ -157,15 +159,15 @@ export function GroupChat({
 
   const actorName = (actorType: string, actorId: string | null) => {
     if (actorType === "agent") {
-      return agents.find((agent) => agent.id === actorId)?.name ?? "群组 Agent";
+      return agents.find((agent) => agent.id === actorId)?.name ?? t("群组 Agent", "Group Agent");
     }
-    return members.find((member) => member.user.id === actorId)?.user.displayName ?? "群组成员";
+    return members.find((member) => member.user.id === actorId)?.user.displayName ?? t("群组成员", "Group member");
   };
 
   const ensureChat = async (): Promise<CoordinationSnapshot> => {
     if (snapshot) return snapshot;
     const created = await api.createGroupChat(group.id, {
-      title: `${group.name} 群聊`,
+      title: t(`${group.name} 群聊`, `${group.name} group chat`),
       mode: draftMode,
       participantAgentIds: executionAgents
         .filter((agent) => agent.status !== "stopped")
@@ -206,13 +208,13 @@ export function GroupChat({
         ? {
             kind: "planning",
             agentId: snapshot.session.coordinatorAgentId,
-            name: coordinator?.name ?? "调度 Agent",
+            name: coordinator?.name ?? t("调度 Agent", "Coordinator Agent"),
           }
         : pendingStep
           ? {
               kind: "thinking",
               agentId: pendingStep.agentId,
-              name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? "群组 Agent",
+              name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? t("群组 Agent", "Group Agent"),
             }
           : null,
     );
@@ -294,13 +296,13 @@ export function GroupChat({
           ? {
               kind: "planning",
               agentId: snapshot.session.coordinatorAgentId,
-              name: coordinator?.name ?? "调度 Agent",
+              name: coordinator?.name ?? t("调度 Agent", "Coordinator Agent"),
             }
           : pendingStep
             ? {
                 kind: "thinking",
                 agentId: pendingStep.agentId,
-                name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? "群组 Agent",
+                name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? t("群组 Agent", "Group Agent"),
               }
             : null,
       );
@@ -343,13 +345,13 @@ export function GroupChat({
             ? {
                 kind: "planning",
                 agentId: next.session.coordinatorAgentId,
-                name: coordinator?.name ?? "调度 Agent",
+                name: coordinator?.name ?? t("调度 Agent", "Coordinator Agent"),
               }
             : pendingStep
               ? {
                   kind: "thinking",
                   agentId: pendingStep.agentId,
-                  name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? "群组 Agent",
+                  name: agents.find((agent) => agent.id === pendingStep.agentId)?.name ?? t("群组 Agent", "Group Agent"),
                 }
               : null,
         );
@@ -378,24 +380,24 @@ export function GroupChat({
             </span>
           ))}
           <small>
-            {members.length} 位成员 · {executionAgents.length} 个执行 Agent
-            {coordinator ? " · 1 个调度 Agent" : ""}
-            {snapshot ? ` · 第 ${snapshot.session.currentRound} 轮 ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound}` : ""}
+            {t(`${members.length} 位成员 · ${executionAgents.length} 个执行 Agent`, `${members.length} members · ${executionAgents.length} execution Agents`)}
+            {coordinator ? t(" · 1 个调度 Agent", " · 1 coordinator Agent") : ""}
+            {snapshot ? t(` · 第 ${snapshot.session.currentRound} 轮 ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound}`, ` · Round ${snapshot.session.currentRound} ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound}`) : ""}
           </small>
         </div>
         <div className="chat-mode-control">
-          <label>协作模式
+          <label>{t("协作模式", "Collaboration mode")}
             <select
               value={snapshot?.session.mode ?? draftMode}
               onChange={(event) => void changeMode(event.target.value as CoordinationMode)}
               disabled={busy || running || !canManage || snapshot?.session.manualAdvanceRequest?.status === "pending" || snapshot?.session.roundExtensionRequest?.status === "pending"}
             >
-              <option value="manual">人工模式</option>
-              <option value="automatic" disabled={executionAgents.length === 0}>自动模式</option>
+              <option value="manual">{t("人工模式", "Manual mode")}</option>
+              <option value="automatic" disabled={executionAgents.length === 0}>{t("自动模式", "Automatic mode")}</option>
             </select>
           </label>
           {snapshot && canManage && (
-            <label>每轮调用
+            <label>{t("每轮调用", "Calls per round")}
               <input
                 className="chat-call-allowance"
                 type="number"
@@ -410,26 +412,26 @@ export function GroupChat({
             </label>
           )}
           {snapshot && (
-            <label className="chat-coordinator-toggle" title="由调度 Agent 按需选择回复者及顺序">
+            <label className="chat-coordinator-toggle" title={t("由调度 Agent 按需选择回复者及顺序", "Let the coordinator Agent choose responders and order as needed")}>
               <input
                 type="checkbox"
                 checked={snapshot.session.coordinatorEnabled}
                 onChange={(event) => void changeCoordinator(event.target.checked)}
                 disabled={busy || running || !canManage}
               />
-              调度 Agent
+              {t("调度 Agent", "Coordinator Agent")}
             </label>
           )}
           {snapshot && snapshot.session.mode !== "automatic" && executionAgents.length > 0 && snapshot.session.manualAdvanceRequest?.status !== "pending" && (
             <button className="button button-ghost" onClick={() => void askAgent()} disabled={busy || running || visibleEvents.length === 0}>
               {running
-                ? "Agent 回复中…"
+                ? t("Agent 回复中…", "Agent responding…")
                 : snapshot?.session.needsReplan && snapshot.session.coordinatorEnabled
-                  ? "让调度 Agent 决定下一步"
-                  : "让下一位 Agent 回复"}
+                  ? t("让调度 Agent 决定下一步", "Let coordinator decide next step")
+                  : t("让下一位 Agent 回复", "Let next Agent respond")}
             </button>
           )}
-          {executionAgents.length === 0 && <button className="button button-ghost" onClick={onOpenAgents}>＋ 添加群组 Agent</button>}
+          {executionAgents.length === 0 && <button className="button button-ghost" onClick={onOpenAgents}>＋ {t("添加群组 Agent", "Add group Agent")}</button>}
         </div>
       </div>
 
@@ -441,15 +443,15 @@ export function GroupChat({
         }}
       >
         {loading ? (
-          <div className="chat-empty-state"><span className="spinner" /><p>正在载入群聊…</p></div>
+          <div className="chat-empty-state"><span className="spinner" /><p>{t("正在载入群聊…", "Loading group chat…")}</p></div>
         ) : visibleEvents.length === 0 ? (
-          <div className="chat-empty-state"><span>◎</span><h2>开始群聊</h2><p>群成员可以直接发言；人工模式由人决定何时让下一位 Agent 回复，自动模式会在新消息后继续调度。</p></div>
+          <div className="chat-empty-state"><span>◎</span><h2>{t("开始群聊", "Start group chat")}</h2><p>{t("群成员可以直接发言；人工模式由人决定何时让下一位 Agent 回复，自动模式会在新消息后继续调度。", "Group members may speak directly. Manual mode lets a person decide when the next Agent responds; automatic mode continues coordination after new messages.")}</p></div>
         ) : visibleEvents.map((event) => {
           const own = event.actorType === "human" && event.actorId === currentUser.id;
           return (
             <article className={`group-chat-message ${event.actorType} ${own ? "own" : ""}`} key={event.id}>
               <div className="chat-avatar">{actorName(event.actorType, event.actorId).slice(0, 1).toUpperCase()}</div>
-              <div><header><strong>{own ? "你" : actorName(event.actorType, event.actorId)}</strong><span>#{event.sequence} · {formatTime(event.createdAt)}</span></header><p>{event.content}</p></div>
+              <div><header><strong>{own ? t("你", "You") : actorName(event.actorType, event.actorId)}</strong><span>#{event.sequence} · {formatTime(event.createdAt)}</span></header><p>{event.content}</p></div>
             </article>
           );
         })}
@@ -459,13 +461,13 @@ export function GroupChat({
             <div>
               <header>
                 <strong>{liveActivity.name}</strong>
-                <span>{liveActivity.kind === "planning" ? "正在规划调度" : "正在思考"}</span>
+                <span>{liveActivity.kind === "planning" ? t("正在规划调度", "Planning coordination") : t("正在思考", "Thinking")}</span>
               </header>
               <p className="chat-thinking">
                 <span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span>
                 {liveActivity.kind === "planning"
-                  ? "正在读取最新上下文，并决定本轮调用哪些 Agent 以及回复顺序…"
-                  : "正在读取调用前的完整上下文并生成回复…"}
+                  ? t("正在读取最新上下文，并决定本轮调用哪些 Agent 以及回复顺序…", "Reading the latest context and deciding which Agents to call and in what order…")
+                  : t("正在读取调用前的完整上下文并生成回复…", "Reading the complete pre-call context and generating a response…")}
               </p>
             </div>
           </article>
@@ -475,7 +477,7 @@ export function GroupChat({
             ref={permissionRef}
             className="round-extension-card conversation-permission-card"
             role="alertdialog"
-            aria-label="请求进入下一个 Agent 步骤"
+            aria-label={t("请求进入下一个 Agent 步骤", "Request the next Agent step")}
             tabIndex={-1}
             onKeyDown={(event) => {
               if (busy || !canApprove) return;
@@ -483,16 +485,16 @@ export function GroupChat({
               if (event.key === "Enter") { event.preventDefault(); void resolveManualAdvance("approve"); }
             }}
           >
-            <div className="round-extension-heading"><span>✋</span>请求权限</div>
-            <p className="round-extension-question">是否允许进入下一步？</p>
+            <div className="round-extension-heading"><span>✋</span>{t("请求权限", "Permission request")}</div>
+            <p className="round-extension-question">{t("是否允许进入下一步？", "Allow the next step?")}</p>
             <p className="round-extension-reason">{snapshot.session.manualAdvanceRequest.rationale}</p>
-            <small>等待期间可以继续补充信息；无人补充则执行原计划下一步，有新信息才由调度 Agent 重新规划。</small>
+            <small>{t("等待期间可以继续补充信息；无人补充则执行原计划下一步，有新信息才由调度 Agent 重新规划。", "You may add information while waiting. Without new input, the original next step runs; only new information triggers replanning.")}</small>
             {canApprove ? (
               <div className="round-extension-actions">
-                <button onClick={() => void resolveManualAdvance("reject")} disabled={busy}>拒绝 <kbd>Esc</kbd></button>
-                <button className="allow" onClick={() => void resolveManualAdvance("approve")} disabled={busy}>允许下一步 <kbd>↵</kbd></button>
+                <button onClick={() => void resolveManualAdvance("reject")} disabled={busy}>{t("拒绝", "Deny")} <kbd>Esc</kbd></button>
+                <button className="allow" onClick={() => void resolveManualAdvance("approve")} disabled={busy}>{t("允许下一步", "Allow next step")} <kbd>↵</kbd></button>
               </div>
-            ) : <span className="round-extension-waiting">等待本轮发起者处理</span>}
+            ) : <span className="round-extension-waiting">{t("等待本轮发起者处理", "Waiting for the round initiator")}</span>}
           </section>
         )}
         {snapshot?.session.roundExtensionRequest?.status === "pending" && !resolvingRoundPermission && (
@@ -500,7 +502,7 @@ export function GroupChat({
             ref={permissionRef}
             className="round-extension-card conversation-permission-card"
             role="alertdialog"
-            aria-label="请求开启下一执行轮次"
+            aria-label={t("请求开启下一执行轮次", "Request another execution round")}
             tabIndex={-1}
             onKeyDown={(event) => {
               if (busy || !canApprove) return;
@@ -508,25 +510,25 @@ export function GroupChat({
               if (event.key === "Enter") { event.preventDefault(); void resolveRoundExtension("approve"); }
             }}
           >
-            <div className="round-extension-heading"><span>✋</span>请求权限</div>
-            <p className="round-extension-question">本轮调用额度已用完，是否允许开启下一轮？</p>
+            <div className="round-extension-heading"><span>✋</span>{t("请求权限", "Permission request")}</div>
+            <p className="round-extension-question">{t("本轮调用额度已用完，是否允许开启下一轮？", "This round's call allowance is exhausted. Allow another round?")}</p>
             <p className="round-extension-reason">{snapshot.session.roundExtensionRequest.rationale}</p>
-            <small>第 {snapshot.session.currentRound} 轮已执行 {snapshot.session.callsInCurrentRound}/{snapshot.session.maxCallsPerRound} 次 Agent 调用。</small>
-            <small>批准后若无人补充新信息，将直接从原调度计划的下一步继续；有新信息时才重新规划。</small>
+            <small>{t(`第 ${snapshot.session.currentRound} 轮已执行 ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound} 次 Agent 调用。`, `Round ${snapshot.session.currentRound} used ${snapshot.session.callsInCurrentRound}/${snapshot.session.maxCallsPerRound} Agent calls.`)}</small>
+            <small>{t("批准后若无人补充新信息，将直接从原调度计划的下一步继续；有新信息时才重新规划。", "If approved without new input, execution continues from the next planned step; new input triggers replanning.")}</small>
             {canApprove ? (
               <div className="round-extension-actions">
-                <button onClick={() => void resolveRoundExtension("reject")} disabled={busy}>拒绝 <kbd>Esc</kbd></button>
-                <button className="allow" onClick={() => void resolveRoundExtension("approve")} disabled={busy}>允许下一轮 <kbd>↵</kbd></button>
+                <button onClick={() => void resolveRoundExtension("reject")} disabled={busy}>{t("拒绝", "Deny")} <kbd>Esc</kbd></button>
+                <button className="allow" onClick={() => void resolveRoundExtension("approve")} disabled={busy}>{t("允许下一轮", "Allow next round")} <kbd>↵</kbd></button>
               </div>
-            ) : <span className="round-extension-waiting">等待本轮发起者处理</span>}
+            ) : <span className="round-extension-waiting">{t("等待本轮发起者处理", "Waiting for the round initiator")}</span>}
           </section>
         )}
         <div ref={messageEnd} />
       </div>
 
       <form className="group-chat-composer" onSubmit={sendMessage}>
-        <textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder={`发送到 ${group.name}`} rows={2} disabled={busy && !running} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
-        <div><span>Enter 发送 · Shift + Enter 换行</span><button className="send-button" disabled={!message.trim() || busy} aria-label="发送群聊消息">↑</button></div>
+        <textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder={t(`发送到 ${group.name}`, `Message ${group.name}`)} rows={2} disabled={busy && !running} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
+        <div><span>{t("Enter 发送 · Shift + Enter 换行", "Enter to send · Shift + Enter for a new line")}</span><button className="send-button" disabled={!message.trim() || busy} aria-label={t("发送群聊消息", "Send group message")}>↑</button></div>
       </form>
     </section>
   );

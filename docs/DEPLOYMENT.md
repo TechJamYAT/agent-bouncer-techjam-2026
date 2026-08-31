@@ -1,11 +1,11 @@
 # Deployment
 
-Use one of two Volcengine ECS paths:
+This repository supports deployment to an existing Linux ECS instance. The
+hackathon submission and judging path remains the local disposable-container
+POC described in the main README; cloud deployment is optional.
 
-- Install and deploy to an existing Linux ECS instance.
-- Provision the complete network and ECS stack with Terraform.
-
-Both profiles require a Volcengine Ark API key and a Responses-capable endpoint.
+The ECS profile requires a Volcengine Ark API key and a Responses-capable
+endpoint.
 
 ## Existing Linux ECS
 
@@ -132,63 +132,10 @@ Stop the application without deleting Agent data:
 docker compose --env-file .env.production down
 ```
 
-## Terraform deployment
-
-Terraform uses `volcenginecc` to create a VPC, subnet, security group, ECS
-instance, EIP, and cloud-init configuration.
-
-Requirements:
-
-- Terraform 1.6+
-- Volcengine account AK/SK with resource-creation permissions
-- Existing ECS SSH key pair
-- Ubuntu image ID and instance type available in the selected region
-- Public Git URL for this repository
-
-Create configuration files:
-
-```bash
-cp .env.example .env.production
-cp deploy/volcengine/terraform.tfvars.example \
-  deploy/volcengine/terraform.tfvars
-```
-
-Set `ARK_API_KEY` and `ARK_MODEL` in `.env.production`. Set the region, zone,
-image, instance type, key pair, allowed CIDRs, and repository URL in
-`terraform.tfvars`.
-
-Provide account credentials only through the current shell:
-
-```bash
-export VOLCENGINE_ACCESS_KEY=your-access-key
-export VOLCENGINE_SECRET_KEY=your-secret-key
-./scripts/deploy-volcengine.sh
-```
-
-After Terraform prints `app_url`, allow 5 to 10 minutes for cloud-init and the
-Docker build. Inspect progress with:
-
-```bash
-ssh root@your-ecs-public-ip
-cloud-init status --wait
-tail -n 200 /var/log/cloud-init-output.log
-```
-
-Destroy the stack when the event ends:
-
-```bash
-terraform -chdir=deploy/volcengine destroy
-```
-
-> [!CAUTION]
-> Destroying the stack removes the ECS instance, system disk, and Agent
-> workspaces. Back up required code first.
-
 ## Secret handling
 
-- Ark keys configure model access; Volcengine account AK/SK configures
-  Terraform. Never pass account AK/SK to an Agent Runtime.
-- `.env.production`, `terraform.tfvars`, and Terraform state must not be
-  committed.
-- The POC stores the Ark key in Terraform user data and state. Production
-  deployments require managed secrets and an encrypted remote state backend.
+- Ark keys configure model access. Never pass cloud-account AK/SK to an Agent
+  Runtime.
+- `.env.production` must not be committed.
+- Production deployments require managed secrets instead of a plaintext env
+  file on the host.

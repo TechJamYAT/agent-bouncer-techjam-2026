@@ -230,7 +230,7 @@ export function evaluateResourceForward(input: ResourceForwardPolicyInput): Poli
   return intent
     ? allow(
         "USER_INTENT_BOUND_FORWARD",
-        "A human-authored message authorized this exact resource and recipient for the current Run.",
+        "An authenticated human explicitly confirmed this exact resource and recipient for the current Run.",
       )
     : deny(
         "HUMAN_FORWARD_INTENT_REQUIRED",
