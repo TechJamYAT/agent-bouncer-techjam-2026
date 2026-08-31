@@ -2,7 +2,7 @@
 
 The local profile runs the React/Fastify control plane on macOS or Linux and
 starts every Codex turn in a disposable Docker, Colima, or Podman container.
-Only the Volcengine Ark model API is remote.
+Only the selected OpenAI-compatible model API is remote.
 
 ## Start
 
@@ -10,14 +10,22 @@ Requirements:
 
 - Node.js 22+
 - Docker, Colima, or Podman
-- An Ark API key and Responses-capable endpoint
+- An API key and model for an OpenAI-compatible Responses API (entered after startup or supplied through `.env`)
 
 ```bash
-ARK_API_KEY=your-ark-api-key ARK_MODEL=ep-your-endpoint-id npm run poc
+npm run poc
 ```
 
-Open <http://localhost:3000>. Press `Ctrl+C` to stop the server and remove this
-instance's remaining Runtime containers.
+Open <http://localhost:3000>, sign in, and complete **Configure a model to
+start**. The form asks for API key, model ID, and base URL; NUS SOCaaS and
+Volcengine Ark presets are included. The submitted key remains only in server
+process memory, is never returned to the browser, and must be entered again
+after a server restart.
+
+For repeatable or shared deployments, preconfigure a Git-ignored `.env` using
+`ARK_API_KEY`, `ARK_MODEL`, and `ARK_BASE_URL`, or the `NUS_*` aliases. Press
+`Ctrl+C` to stop the server and remove this instance's remaining Runtime
+containers.
 
 Force an engine with `CONTAINER_ENGINE=docker` or
 `CONTAINER_ENGINE=podman`. Colima uses the Docker CLI.

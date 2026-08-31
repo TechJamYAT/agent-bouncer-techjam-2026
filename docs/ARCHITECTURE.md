@@ -79,8 +79,10 @@ times for that human's own private resources but grants no content action.
 
 An exact title is blindly resolved in the control plane. Missing, inaccessible,
 and nonexistent references have the same Runtime-facing failure. If the exact
-owned resource is not attached, `read` creates an exact-resource owner approval;
-an attachment already supplies that Run-scoped read-and-answer grant.
+owned resource is not attached, any content operation first creates a
+metadata-only catalog approval and then a separate exact `read` or `disclose`
+approval. An attachment already supplies the Run-scoped read-and-answer grant
+for that exact file, but never supplies disclosure authority.
 
 An external `forward` is always evaluated separately. For an explicitly attached
 own resource, the Agent may create the exact recipient-bound owner request
@@ -149,6 +151,29 @@ stopped  error
 ```
 
 Interrupted Runs become `cancelled` after a restart.
+
+`AgentService` is still the largest module and currently combines several
+application-service responsibilities. Policy evaluation, persistence,
+coordination, workspace management, runner implementations, and mutable model
+Runtime configuration are already separate modules. The next low-risk
+decomposition should extract protected-resource approval/resume orchestration
+and direct-message/Agent lifecycle services behind the existing HTTP contract;
+this should be done after the hackathon flow is frozen, not as an unbounded
+pre-demo rewrite.
+
+### Model Runtime configuration
+
+`ModelRuntimeConfiguration` owns instance-scoped OpenAI-compatible credentials
+separately from Agent orchestration. Environment configuration remains the
+deployment default. An authenticated visitor may also submit an API key, model
+ID, and base URL through the Web setup dialog. Browser-supplied secrets remain
+only in server memory, are never returned by `/api/system`, and are rejected
+while a Run is active or waiting for approval. Environment-managed settings are
+read-only in the Web UI; an in-memory setting can be changed only by the signed-in
+user who first configured it. The shared `AppConfig` object is updated only after
+validation and the generated Codex config is rewritten; all runner instances
+observe the same instance-level configuration. This is intentionally a local or
+single-instance judging convenience, not multi-tenant BYOK isolation.
 
 ### Storage
 

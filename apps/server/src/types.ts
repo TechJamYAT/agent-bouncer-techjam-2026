@@ -354,6 +354,9 @@ export interface AccessRequest {
   expiresAt: string;
   resolvedAt: string | null;
   resolvedByUserId: string | null;
+  continuationAction?: "read" | "disclose" | "forward" | null | undefined;
+  continuationResourceId?: string | null | undefined;
+  continuationRecipientUserId?: string | null | undefined;
 }
 
 export interface AuthorizationDecision {

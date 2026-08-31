@@ -232,6 +232,9 @@ export interface AccessRequest {
   expiresAt: string;
   resolvedAt: string | null;
   resolvedByUserId: string | null;
+  continuationAction?: "read" | "disclose" | "forward" | null;
+  continuationResourceId?: string | null;
+  continuationRecipientUserId?: string | null;
   resourceTitle: string;
   agentName: string;
   requesterName: string;
@@ -376,6 +379,9 @@ export interface SystemInfo {
   arkConfigured: boolean;
   arkBaseUrl: string;
   arkModel: string | null;
+  modelProvider: string;
+  modelConfigurationSource: "environment" | "browser" | null;
+  modelConfigurationEditable: boolean;
   codexAvailable: boolean;
   codexSandboxMode: string;
   runtimeProvider: "local-process" | "container";

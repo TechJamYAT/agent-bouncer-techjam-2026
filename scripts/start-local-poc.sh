@@ -22,25 +22,6 @@ codex_sandbox_mode="${CODEX_SANDBOX_MODE:-workspace-write}"
 
 # NUS SOCaaS is OpenAI-compatible. Accept its variable names as local aliases
 # so participants do not need to duplicate the same credential as ARK_*.
-if [[ -z "${ARK_API_KEY:-}" && -z "${NUS_API_KEY:-}" && -t 0 ]]; then
-  printf '[local-poc] No model credential was found in the environment or .env.\n' >&2
-  printf 'OpenAI-compatible API key (hidden; not saved): ' >&2
-  IFS= read -r -s model_api_key
-  printf '\n' >&2
-  export ARK_API_KEY="$model_api_key"
-  if [[ -z "${ARK_MODEL:-}" && -z "${NUS_MODEL:-}" ]]; then
-    printf 'Model or endpoint ID: ' >&2
-    IFS= read -r model_id
-    export ARK_MODEL="$model_id"
-  fi
-  if [[ -z "${ARK_BASE_URL:-}" && -z "${NUS_URL:-}" ]]; then
-    printf 'Responses API base URL [https://ark.cn-beijing.volces.com/api/v3]: ' >&2
-    IFS= read -r model_base_url
-    if [[ -n "$model_base_url" ]]; then
-      export ARK_BASE_URL="$model_base_url"
-    fi
-  fi
-fi
 if [[ -z "${ARK_API_KEY:-}" && -n "${NUS_API_KEY:-}" ]]; then
   export ARK_API_KEY="$NUS_API_KEY"
 fi
@@ -104,11 +85,10 @@ detect_engine() {
 }
 
 if [[ -z "${ARK_API_KEY:-}" || -z "${ARK_MODEL:-}" ]]; then
-  log "A model credential and model ID are required."
-  log "Copy .env.example to .env and configure ARK_* or NUS_* values, then retry."
-  exit 2
+  log "Model Runtime is not preconfigured. Start the platform, sign in, and use Configure API key in the Web UI."
+else
+  log "Model provider: OpenAI-compatible Responses API; credential: configured ([REDACTED])."
 fi
-log "Model provider: OpenAI-compatible Responses API; credential: configured ([REDACTED])."
 
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-3000}"

@@ -25,9 +25,10 @@ Agent, group, conversation, or resource boundary.
 - Private and group text resources.
 - Explicit private-resource grants and immediate revocation.
 - A central resource policy used by every protected knowledge-read route.
-- Progressive catalog, exact read, and recipient-bound forward requests; only a
-  trusted owner approval can mint the action-specific Run capability. Unattached
-  forwards require catalog confirmation before the forward request.
+- Progressive catalog, exact read/disclosure, and recipient-bound forward
+  requests; only a trusted owner approval can mint the action-specific Run
+  capability. Every un-attached content operation requires catalog confirmation
+  before its exact action request.
 - Correlated authorization decisions containing the human, Agent, action,
   resource, result, reason, and request context.
 - The exact required demo: Alice's personal Agent reads an Alice resource after
@@ -150,6 +151,9 @@ Additional invariants:
 - Exact resource names are blindly resolved. Missing, inaccessible, and
   nonexistent references have the same Runtime-facing response and never trigger
   fuzzy fallback or an approval for an arbitrary resource.
+- For an un-attached own resource, exact read or disclosure requires a prior
+  metadata-only catalog approval in the same Run. An attachment grants read only
+  for that exact file and never grants disclosure or access to another file.
 - External transfer requires an authenticated human to confirm one exact owned
   private resource and one distinct registered recipient. If the resource was not
   attached, the current Run must first obtain metadata-only catalog approval and

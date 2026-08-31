@@ -81,6 +81,11 @@ export const api = {
     }),
   logout: () => request<{ ok: boolean }>("/api/session", { method: "DELETE" }),
   system: () => request<SystemInfo>("/api/system"),
+  configureModelRuntime: (body: { apiKey: string; model: string; baseUrl: string }) =>
+    request<SystemInfo>("/api/system/model-runtime", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   users: () => request<{ users: User[] }>("/api/users"),
   directConversations: () =>
     request<{ conversations: DirectConversationSummary[] }>("/api/direct-conversations"),

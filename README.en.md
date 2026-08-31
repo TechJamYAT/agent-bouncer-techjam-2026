@@ -6,8 +6,9 @@ operations at a trusted backend boundary.
 
 The core story is deliberately narrow and progressive. An attachment grants
 `Case` read-and-answer access to one exact resource for one Run. Without an
-attachment, the Agent must request either metadata-only access to Alice's own
-catalog or read access to one blindly resolved exact title. Forwarding an
+attachment, any content use—even when the human supplies an exact title—first
+requires metadata-only catalog approval and then a separate exact read or
+disclosure approval. Forwarding an
 unattached own resource first requires catalog approval and file confirmation;
 an attached resource can go directly to the separate exact-resource/recipient
 approval. Alice cannot authorize Bob's private data.
@@ -71,14 +72,16 @@ front-end-only permission screen.
 
 The detailed English script is in [docs/DEMO.md](docs/DEMO.md). The one-page
 trust-boundary diagram is [output/pdf/bouncer-architecture.pdf](output/pdf/bouncer-architecture.pdf).
+The authoritative text state machine is
+[docs/PROTECTED_RESOURCE_FLOW.md](docs/PROTECTED_RESOURCE_FLOW.md); diagrams are
+updated only after that flow is accepted.
 
 ## Run and verify
 
 Requirements: Node.js 22+, npm 10+, Docker/Colima/rootless Podman, and an
 OpenAI-compatible Responses API endpoint.
 
-Create a Git-ignored `.env` using `.env.example`, then start from isolated demo
-state:
+Start from isolated demo state without needing to preconfigure a key:
 
 ```bash
 npm run demo:fresh
@@ -86,6 +89,11 @@ npm run demo:fresh
 
 Open <http://localhost:3000>. Seeded usernames are `alice`, `bob`, `carol`,
 `david`, and `emma`; the local-only demo password is `launchpad-demo`.
+After sign-in, the setup dialog accepts an API key, model ID, and OpenAI-compatible
+Responses API base URL. NUS SOCaaS and Volcengine Ark presets are included. A
+browser-supplied key remains only in server-process memory and is never returned
+to the browser or written to application data. Deployers may still preconfigure
+a Git-ignored `.env`; that is preferred for a shared production instance.
 
 Run the complete submission check:
 

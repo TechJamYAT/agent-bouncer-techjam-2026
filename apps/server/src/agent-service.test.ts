@@ -43,6 +43,14 @@ async function makeService(
 ): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
+  return makeServiceAtRoot(root, runner, environment);
+}
+
+async function makeServiceAtRoot(
+  root: string,
+  runner: AgentRunner = new FakeRunner(),
+  environment: NodeJS.ProcessEnv = {},
+): Promise<AgentService> {
   const config = loadConfig({
     NODE_ENV: "test",
     APP_DATA_DIR: path.join(root, "data"),
@@ -63,7 +71,7 @@ async function makeService(
 }
 
 describe("Agent lifecycle", () => {
-  it("pauses a disclosure Run for owner approval and resumes it with a fresh credential", async () => {
+  it("requires catalog approval before a separate disclosure approval for an unattached exact title", async () => {
     let service!: AgentService;
     const runtimeTokens: string[] = [];
     let call = 0;
@@ -72,14 +80,37 @@ describe("Agent lifecycle", () => {
         call += 1;
         const token = request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "";
         runtimeTokens.push(token);
+        if (call === 1) {
+          const result = await service.discloseResourceForRuntimeByReference(token, {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+          });
+          expect(result).toMatchObject({
+            pending: true,
+            accessRequest: {
+              action: "list",
+              continuationAction: "disclose",
+              continuationResourceId: DEMO_RESOURCE_IDS.alicePrivate,
+            },
+          });
+          return { output: "Waiting for catalog approval", threadId: "approval-thread", usage: null };
+        }
+        if (call === 2) {
+          const catalog = await service.getPrivateResourceCatalogForRuntime(token, {
+            ownerUsername: "alice",
+          });
+          expect(catalog).toMatchObject({ visibility: "metadata_only" });
+          const result = await service.discloseResourceForRuntimeByReference(token, {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+          });
+          expect(result).toMatchObject({ pending: true, accessRequest: { action: "disclose" } });
+          return { output: "Waiting for disclosure approval", threadId: "approval-thread", usage: null };
+        }
         const result = await service.discloseResourceForRuntimeByReference(token, {
           ownerUsername: "alice",
           title: "Alice — Private Interview Notes",
         });
-        if (call === 1) {
-          expect(result).toMatchObject({ pending: true });
-          return { output: "Waiting for approval", threadId: "approval-thread", usage: null };
-        }
         expect(result).toMatchObject({
           resource: { id: DEMO_RESOURCE_IDS.alicePrivate },
           decision: { decision: "allow", reasonCode: "DISCLOSURE_RECIPIENT_APPROVED" },
@@ -103,8 +134,14 @@ describe("Agent lifecycle", () => {
       statusCode: 409,
       message: "Resolve the pending protected-resource approval before starting another Run",
     });
-    const request = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
-    expect(request).toMatchObject({ runId: launched.run.id, status: "pending", action: "disclose" });
+    const catalogRequest = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
+    expect(catalogRequest).toMatchObject({
+      runId: launched.run.id,
+      status: "pending",
+      action: "list",
+      continuationAction: "disclose",
+      continuationResourceId: DEMO_RESOURCE_IDS.alicePrivate,
+    });
     await expect(
       service.discloseResourceForRuntimeByReference(runtimeTokens[0]!, {
         ownerUsername: "alice",
@@ -112,21 +149,89 @@ describe("Agent lifecycle", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 401 });
 
-    await service.resolveAccessRequest(DEMO_USER_IDS.alice, request.id, "approve");
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, catalogRequest.id, "approve");
+    await expect.poll(() => service.listAccessRequests(DEMO_USER_IDS.alice)
+      .some((request) => request.runId === launched.run.id && request.action === "disclose" && request.status === "pending"))
+      .toBe(true);
+    const disclosureRequest = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .find((request) => request.runId === launched.run.id && request.action === "disclose")!;
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, disclosureRequest.id, "approve");
     await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
     expect(service.getRun(launched.run.id).output).toBe("Approved disclosure delivered.");
     expect(service.getAgent(agent.id).status).toBe("ready");
-    expect(runtimeTokens).toHaveLength(2);
+    expect(runtimeTokens).toHaveLength(3);
     expect(runtimeTokens[1]).not.toBe(runtimeTokens[0]);
-    expect(service.listAccessRequests(DEMO_USER_IDS.alice)[0]?.status).toBe("approved");
+    expect(runtimeTokens[2]).not.toBe(runtimeTokens[1]);
+    expect(service.listAccessRequests(DEMO_USER_IDS.alice)
+      .filter((request) => request.runId === launched.run.id))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: "list", status: "approved" }),
+        expect.objectContaining({ action: "disclose", status: "approved" }),
+      ]));
     expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "resource:list", reasonCode: "PRIVATE_CATALOG_METADATA_APPROVED" }),
       expect.objectContaining({ action: "approval:request", reasonCode: "HUMAN_APPROVAL_REQUIRED" }),
       expect.objectContaining({ action: "approval:approve", reasonCode: "RESOURCE_OWNER_APPROVED" }),
       expect.objectContaining({ action: "resource:disclose", decision: "allow" }),
     ]));
   });
 
-  it("blind-resolves an exact own title, requests read approval, and resumes with a Run grant", async () => {
+  it("skips catalog approval for an attached exact file but still requires disclosure approval", async () => {
+    let service!: AgentService;
+    let calls = 0;
+    service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        const disclosed = await service.discloseResourceForRuntimeByReference(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+          },
+        );
+        if (calls === 1) {
+          expect(disclosed).toMatchObject({
+            pending: true,
+            accessRequest: { action: "disclose" },
+          });
+          return { output: "Waiting for disclosure approval", threadId: "attached-disclosure", usage: null };
+        }
+        expect(disclosed).toMatchObject({
+          resource: { id: DEMO_RESOURCE_IDS.alicePrivate },
+          decision: { decision: "allow", reasonCode: "DISCLOSURE_RECIPIENT_APPROVED" },
+        });
+        return { output: "Attached source disclosed after approval.", threadId: "attached-disclosure", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Attached disclosure Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "把 Alice — Private Interview Notes 的原文完整展示给我",
+      DEMO_USER_IDS.alice,
+      [{ ownerUsername: "alice", title: "Alice — Private Interview Notes" }],
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
+    const requests = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .filter((request) => request.runId === launched.run.id);
+    expect(requests).toEqual([
+      expect.objectContaining({ action: "disclose", status: "pending" }),
+    ]);
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, requests[0]!.id, "approve");
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(calls).toBe(2);
+    expect(service.getRun(launched.run.id).output).toBe("Attached source disclosed after approval.");
+    expect(service.listDecisions(DEMO_USER_IDS.alice).filter((decision) =>
+      decision.runId === launched.run.id && decision.action === "resource:list"
+    )).toHaveLength(0);
+  });
+
+  it("requires catalog approval before a separate read approval for an unattached exact title", async () => {
     let service!: AgentService;
     const runtimeTokens: string[] = [];
     let calls = 0;
@@ -135,14 +240,37 @@ describe("Agent lifecycle", () => {
         calls += 1;
         const token = request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "";
         runtimeTokens.push(token);
+        if (calls === 1) {
+          const result = await service.readResourceForRuntimeByReference(token, {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+          });
+          expect(result).toMatchObject({
+            pending: true,
+            accessRequest: {
+              action: "list",
+              continuationAction: "read",
+              continuationResourceId: DEMO_RESOURCE_IDS.alicePrivate,
+            },
+          });
+          return { output: "Waiting for catalog approval", threadId: "read-approval", usage: null };
+        }
+        if (calls === 2) {
+          const catalog = await service.getPrivateResourceCatalogForRuntime(token, {
+            ownerUsername: "alice",
+          });
+          expect(catalog).toMatchObject({ visibility: "metadata_only" });
+          const result = await service.readResourceForRuntimeByReference(token, {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+          });
+          expect(result).toMatchObject({ pending: true, accessRequest: { action: "read" } });
+          return { output: "Waiting for read approval", threadId: "read-approval", usage: null };
+        }
         const result = await service.readResourceForRuntimeByReference(token, {
           ownerUsername: "alice",
           title: "Alice — Private Interview Notes",
         });
-        if (calls === 1) {
-          expect(result).toMatchObject({ pending: true, accessRequest: { action: "read" } });
-          return { output: "Waiting for read approval", threadId: "read-approval", usage: null };
-        }
         expect(result).toMatchObject({
           resource: { id: DEMO_RESOURCE_IDS.alicePrivate },
           decision: { decision: "allow", reasonCode: "TASK_SCOPED_GRANT" },
@@ -163,23 +291,203 @@ describe("Agent lifecycle", () => {
     );
 
     await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
-    const request = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
-    expect(request).toMatchObject({
-      action: "read",
+    const catalogRequest = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
+    expect(catalogRequest).toMatchObject({
+      action: "list",
+      resourceId: null,
+      status: "pending",
+      continuationAction: "read",
+      continuationResourceId: DEMO_RESOURCE_IDS.alicePrivate,
+    });
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, catalogRequest.id, "approve");
+    await expect.poll(() => service.listAccessRequests(DEMO_USER_IDS.alice)
+      .some((request) => request.runId === launched.run.id && request.action === "read" && request.status === "pending"))
+      .toBe(true);
+    const readRequest = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .find((request) => request.runId === launched.run.id && request.action === "read")!;
+    expect(readRequest).toMatchObject({
       resourceId: DEMO_RESOURCE_IDS.alicePrivate,
       resourceTitle: "Alice — Private Interview Notes",
-      status: "pending",
     });
-    await service.resolveAccessRequest(DEMO_USER_IDS.alice, request.id, "approve");
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, readRequest.id, "approve");
     await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(runtimeTokens[1]).not.toBe(runtimeTokens[0]);
+    expect(runtimeTokens[2]).not.toBe(runtimeTokens[1]);
     expect(service.getRun(launched.run.id).output).toBe("已基于获批资料完成总结。");
     expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "resource:list", decision: "deny", reasonCode: "PRIVATE_CATALOG_APPROVAL_REQUIRED" }),
+      expect.objectContaining({ action: "resource:list", decision: "allow", reasonCode: "PRIVATE_CATALOG_METADATA_APPROVED" }),
       expect.objectContaining({ action: "resource:read", decision: "deny", reasonCode: "PRIVATE_GRANT_REQUIRED" }),
       expect.objectContaining({ action: "approval:request", reasonCode: "HUMAN_READ_APPROVAL_REQUIRED" }),
       expect.objectContaining({ action: "resource:read", decision: "allow", reasonCode: "TASK_SCOPED_GRANT" }),
     ]));
+  });
+
+  it("creates both approvals when the Agent only promises to read an unattached exact file", async () => {
+    let calls = 0;
+    const service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        if (request.prompt.includes("Launchpad trusted continuation result") && request.prompt.includes("second candidate") === false) {
+          return {
+            output: request.prompt.includes("Users want a guided handoff")
+              ? "已根据获批文件完成总结。"
+              : "目录已获批。",
+            threadId: "prose-only-read",
+            usage: null,
+            toolEvents: [],
+          };
+        }
+        return {
+          output: "我会申请并读取该文件。",
+          threadId: request.threadId ?? "prose-only-read",
+          usage: null,
+          toolEvents: [],
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Prose-only read Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "请总结 Alice — Private Interview Notes",
+      DEMO_USER_IDS.alice,
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
+    const catalogRequest = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .find((request) => request.runId === launched.run.id && request.action === "list")!;
+    expect(catalogRequest).toMatchObject({
+      continuationAction: "read",
+      continuationResourceId: DEMO_RESOURCE_IDS.alicePrivate,
+    });
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, catalogRequest.id, "approve");
+    await expect.poll(() => service.listAccessRequests(DEMO_USER_IDS.alice)
+      .some((request) => request.runId === launched.run.id && request.action === "read" && request.status === "pending"))
+      .toBe(true);
+    const readRequest = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .find((request) => request.runId === launched.run.id && request.action === "read")!;
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, readRequest.id, "approve");
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(calls).toBeGreaterThanOrEqual(4);
+    expect(service.getRun(launched.run.id).middlewareEvidenceStatus).toBe("satisfied");
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: launched.run.id, action: "resource:list", decision: "allow" }),
+      expect.objectContaining({ runId: launched.run.id, action: "resource:read", decision: "allow" }),
+    ]));
+  });
+
+  it("uses an attached file without another approval when the Agent only promises to read it", async () => {
+    let calls = 0;
+    const service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        return {
+          output: request.prompt.includes("Launchpad trusted read result")
+            ? "已根据附加文件完成总结。"
+            : "我会读取附加文件。",
+          threadId: request.threadId ?? "attached-prose-read",
+          usage: null,
+          toolEvents: [],
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent(
+      { name: "Attached read Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "请总结 Alice — Private Interview Notes",
+      DEMO_USER_IDS.alice,
+      [{ ownerUsername: "alice", title: "Alice — Private Interview Notes" }],
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(calls).toBe(2);
+    expect(service.listAccessRequests(DEMO_USER_IDS.alice)).toHaveLength(0);
+    expect(service.getRun(launched.run.id).output).toBe("已根据附加文件完成总结。");
+    expect(service.listDecisions(DEMO_USER_IDS.alice)).toContainEqual(expect.objectContaining({
+      runId: launched.run.id,
+      action: "resource:read",
+      decision: "allow",
+    }));
+  });
+
+  it("does not let one attachment authorize a different private file", async () => {
+    let service!: AgentService;
+    let calls = 0;
+    service = await makeService({
+      run: async (request) => {
+        calls += 1;
+        const token = request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "";
+        if (calls === 2) {
+          const catalog = await service.getPrivateResourceCatalogForRuntime(token, {
+            ownerUsername: "alice",
+          });
+          expect(catalog).toMatchObject({ visibility: "metadata_only" });
+        }
+        const result = await service.readResourceForRuntimeByReference(token, {
+          ownerUsername: "alice",
+          title: "Alice — Separate Private Notes",
+        });
+        if (calls < 3) {
+          expect(result).toMatchObject({ pending: true });
+          return {
+            output: calls === 1 ? "等待目录审批。" : "等待另一份文件的读取审批。",
+            threadId: "separate-file-read",
+            usage: null,
+          };
+        }
+        expect(result).toMatchObject({
+          resource: { title: "Alice — Separate Private Notes" },
+          decision: { decision: "allow" },
+        });
+        return { output: "已读取另一份获批文件。", threadId: "separate-file-read", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const separate = await service.createResource(DEMO_USER_IDS.alice, {
+      title: "Alice — Separate Private Notes",
+      content: "This is a different private resource.",
+      scope: "private",
+    });
+    const agent = await service.createAgent(
+      { name: "Separate file Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await service.sendMessage(
+      agent.id,
+      "请读取 Alice — Separate Private Notes",
+      DEMO_USER_IDS.alice,
+      [{ ownerUsername: "alice", title: "Alice — Private Interview Notes" }],
+    );
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("waiting_for_approval");
+    const catalogRequest = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .find((request) => request.runId === launched.run.id && request.action === "list")!;
+    expect(catalogRequest.continuationResourceId).toBe(separate.id);
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, catalogRequest.id, "approve");
+    await expect.poll(() => service.listAccessRequests(DEMO_USER_IDS.alice)
+      .some((request) => request.runId === launched.run.id && request.action === "read" && request.status === "pending"))
+      .toBe(true);
+    const readRequest = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .find((request) => request.runId === launched.run.id && request.action === "read")!;
+    expect(readRequest.resourceId).toBe(separate.id);
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, readRequest.id, "approve");
+
+    await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
+    expect(calls).toBe(3);
+    expect(service.getRun(launched.run.id).output).toBe("已读取另一份获批文件。");
   });
 
   it("fails closed for an unknown exact title without creating an approval request", async () => {
@@ -218,14 +526,41 @@ describe("Agent lifecycle", () => {
     service = await makeService({
       run: async (request) => {
         calls += 1;
-        const disclosed = await service.discloseResourceForRuntimeByReference(
-          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
-          {
-            ownerUsername: "alice",
-            title: "Alice — Private Interview Notes",
-          },
-        );
         if (calls === 1) {
+          const disclosed = await service.discloseResourceForRuntimeByReference(
+            request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+            {
+              ownerUsername: "alice",
+              title: "Alice — Private Interview Notes",
+            },
+          );
+          expect(disclosed).toMatchObject({
+            pending: true,
+            accessRequest: {
+              action: "list",
+              continuationAction: "disclose",
+              continuationResourceId: DEMO_RESOURCE_IDS.alicePrivate,
+            },
+          });
+          return {
+            output: "Waiting for catalog approval.",
+            threadId: "middleware-disclosure-thread",
+            usage: null,
+          };
+        }
+        if (calls === 2) {
+          const catalog = await service.getPrivateResourceCatalogForRuntime(
+            request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+            { ownerUsername: "alice" },
+          );
+          expect(catalog).toMatchObject({ visibility: "metadata_only" });
+          const disclosed = await service.discloseResourceForRuntimeByReference(
+            request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+            {
+              ownerUsername: "alice",
+              title: "Alice — Private Interview Notes",
+            },
+          );
           expect(disclosed).toMatchObject({ pending: true, accessRequest: { action: "disclose" } });
           return {
             output: "Waiting for explicit disclosure approval.",
@@ -233,6 +568,13 @@ describe("Agent lifecycle", () => {
             usage: null,
           };
         }
+        const disclosed = await service.discloseResourceForRuntimeByReference(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          {
+            ownerUsername: "alice",
+            title: "Alice — Private Interview Notes",
+          },
+        );
         expect(disclosed).toMatchObject({
           resource: { id: DEMO_RESOURCE_IDS.alicePrivate },
           decision: { decision: "allow", reasonCode: "DISCLOSURE_RECIPIENT_APPROVED" },
@@ -258,14 +600,25 @@ describe("Agent lifecycle", () => {
 
     await expect.poll(() => service.getRun(launched.run.id).status)
       .toBe("waiting_for_approval");
-    const request = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
-    expect(request).toMatchObject({ action: "disclose", status: "pending" });
+    const catalogRequest = service.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
+    expect(catalogRequest).toMatchObject({
+      action: "list",
+      status: "pending",
+      continuationAction: "disclose",
+      continuationResourceId: DEMO_RESOURCE_IDS.alicePrivate,
+    });
     expect(service.listGrants(DEMO_USER_IDS.alice)).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ runId: launched.run.id, action: "disclose", revokedAt: null }),
     ]));
-    await service.resolveAccessRequest(DEMO_USER_IDS.alice, request.id, "approve");
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, catalogRequest.id, "approve");
+    await expect.poll(() => service.listAccessRequests(DEMO_USER_IDS.alice)
+      .some((request) => request.runId === launched.run.id && request.action === "disclose" && request.status === "pending"))
+      .toBe(true);
+    const disclosureRequest = service.listAccessRequests(DEMO_USER_IDS.alice)
+      .find((request) => request.runId === launched.run.id && request.action === "disclose")!;
+    await service.resolveAccessRequest(DEMO_USER_IDS.alice, disclosureRequest.id, "approve");
     await expect.poll(() => service.getRun(launched.run.id).status).toBe("completed");
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(service.listDecisions(DEMO_USER_IDS.alice)).toEqual(expect.arrayContaining([
       expect.objectContaining({
         runId: launched.run.id,
@@ -374,7 +727,13 @@ describe("Agent lifecycle", () => {
           title: "Alice — Private Interview Notes",
           recipientUsername: "bob",
         });
+        const retried = await service.forwardResourceForRuntimeByReference(token, {
+          ownerUsername: "alice",
+          title: "Alice — Private Interview Notes",
+          recipientUsername: "bob",
+        });
         expect(forwarded.policy.reasonCode).toBe("USER_INTENT_BOUND_FORWARD");
+        expect(retried.receipt.deliveredMessageId).toBe(forwarded.receipt.deliveredMessageId);
         return { output: "审批后已转发。", threadId: "forward-approval", usage: null };
       },
       cancel: async () => false,
@@ -406,6 +765,7 @@ describe("Agent lifecycle", () => {
     expect(runtimeTokens[1]).not.toBe(runtimeTokens[0]);
     expect(service.getHumanDirectMessages(DEMO_USER_IDS.bob, DEMO_USER_IDS.alice).at(-1)?.content)
       .toContain("Alice — Private Interview Notes");
+    expect(service.getHumanDirectMessages(DEMO_USER_IDS.bob, DEMO_USER_IDS.alice)).toHaveLength(1);
   });
 
   it("supports catalog approval followed by a separate forward approval in one Run", async () => {
@@ -594,6 +954,105 @@ describe("Agent lifecycle", () => {
       middlewareEvidenceStatus: "satisfied",
     });
     expect(service.listDecisions(DEMO_USER_IDS.alice).filter((decision) =>
+      decision.runId === launched.run.id &&
+      decision.action === "resource:list" &&
+      decision.decision === "allow"
+    )).toHaveLength(1);
+  });
+
+  it("recovers a completed approved action after restart without repeating the protected operation", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-restart-test-"));
+    temporaryDirectories.push(root);
+    let firstService!: AgentService;
+    firstService = await makeServiceAtRoot(root, {
+      run: async (request) => {
+        const catalog = await firstService.getPrivateResourceCatalogForRuntime(
+          request.runtimeEnvironment?.LAUNCHPAD_RUNTIME_TOKEN ?? "",
+          { ownerUsername: "alice" },
+        );
+        expect(catalog).toMatchObject({ pending: true });
+        return { output: "等待目录审批。", threadId: "restart-catalog", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await firstService.createAgent(
+      { name: "Restart recovery Case", scope: "group", groupId: DEMO_GROUP_IDS.alpha },
+      DEMO_USER_IDS.alice,
+    );
+    const launched = await firstService.sendMessage(
+      agent.id,
+      "查看我的目录",
+      DEMO_USER_IDS.alice,
+    );
+    await expect.poll(() => firstService.getRun(launched.run.id).status)
+      .toBe("waiting_for_approval");
+    const request = firstService.listAccessRequests(DEMO_USER_IDS.alice)[0]!;
+    const persistedStore = new JsonStore(path.join(root, "data", "db.json"));
+    await persistedStore.initialize();
+    const resolvedAt = new Date().toISOString();
+    await persistedStore.mutate((database) => {
+      const storedRequest = database.accessRequests.find((item) => item.id === request.id)!;
+      storedRequest.status = "approved";
+      storedRequest.resolvedAt = resolvedAt;
+      storedRequest.resolvedByUserId = DEMO_USER_IDS.alice;
+      const run = database.runs.find((item) => item.id === launched.run.id)!;
+      run.status = "running";
+      run.middlewareEvidenceRequirements = [{
+        action: "resource:list",
+        decision: "allow",
+        targetId: DEMO_USER_IDS.alice,
+        reasonCode: "PRIVATE_CATALOG_METADATA_APPROVED",
+      }];
+      run.middlewareEvidenceStatus = "pending";
+      database.authorizationDecisions.push({
+        id: "restart-catalog-allow",
+        occurredAt: resolvedAt,
+        initiatingHumanId: DEMO_USER_IDS.alice,
+        executingAgentId: agent.id,
+        runId: launched.run.id,
+        taskId: null,
+        conversationId: request.conversationId,
+        action: "resource:list",
+        targetType: "member",
+        targetId: DEMO_USER_IDS.alice,
+        decision: "allow",
+        reasonCode: "PRIVATE_CATALOG_METADATA_APPROVED",
+        policyVersion: "bouncer-v1",
+        detail: "Persisted metadata-only catalog result.",
+        requestEvidence: {
+          source: "control_plane",
+          method: "POST",
+          path: `/api/access-requests/${request.id}/resume`,
+          command: null,
+          body: { action: "list", requestId: request.id },
+          responseStatus: 200,
+          redacted: true,
+        },
+      });
+    });
+
+    let recoveryCalls = 0;
+    let recoveryPrompt = "";
+    const recoveredService = await makeServiceAtRoot(root, {
+      run: async (runnerRequest) => {
+        recoveryCalls += 1;
+        recoveryPrompt = runnerRequest.prompt;
+        return { output: "已从持久化目录结果恢复。", threadId: "restart-catalog", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+
+    await expect.poll(() => recoveredService.getRun(launched.run.id).status).toBe("completed");
+    expect(recoveryCalls).toBe(1);
+    expect(recoveryPrompt).toContain("Launchpad control-plane recovery");
+    expect(recoveryPrompt).not.toContain("Retry exactly");
+    expect(recoveredService.getRun(launched.run.id)).toMatchObject({
+      output: "已从持久化目录结果恢复。",
+      middlewareEvidenceStatus: "satisfied",
+    });
+    expect(recoveredService.listDecisions(DEMO_USER_IDS.alice).filter((decision) =>
       decision.runId === launched.run.id &&
       decision.action === "resource:list" &&
       decision.decision === "allow"

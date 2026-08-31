@@ -10,8 +10,8 @@
 允许或拒绝决定。
 
 本项目的完整演示路径是渐进授权：Alice 附加自己的资料后，`Case` 可在当前 Run 直接读取；
-没有附件时，Agent 点名精确资料会触发读取审批，未知资料则安全失败；不知道名称时，Agent
-先申请 Alice 本人目录的最小元数据权限。未附加资料的外发必须先审批目录、确认精确文件，再
+没有附件但需要正文时，即使用户点名了精确资料，也必须先审批 Alice 本人目录的最小元数据权限，
+再单独审批读取或原文披露；未知资料安全失败。未附加资料的外发也必须先审批目录、确认精确文件，再
 审批文件与接收人；已附加资料则可直接进入转发审批。后端直接交付且不把正文返回 Agent。
 Alice 不能批准 Bob 的资料。
 
@@ -69,8 +69,9 @@ Agent 输出、资料内容、命令、API 路径和审计原因码保持原样�
 
 1. Alice 未附加资料并询问“我有哪些资料”。Agent 调用 `vault.mjs list --owner alice`，
    Bouncer 暂停 Run；Alice 批准后只返回她自己的标题、类型和创建时间，不返回正文。
-2. Alice 选择精确资料后，读取仍是独立动作。若资料未附加，Agent 发起 exact-resource read
-   申请；若已附加，则附件本身创建仅限当前 Run 的 `read` grant，无需重复确认。
+2. Alice 选择精确资料后，读取仍是独立动作。若资料未附加，即使标题已明确，也先完成目录审批，
+   再发起 exact-resource read 申请；若已附加，则附件本身创建仅限当前 Run、仅限该文件的
+   `read` grant，无需重复确认。原文披露始终是独立动作；附件不会自动授权披露。
 3. Alice 要求转发给 Bob。若文件未附加，Bouncer 先要求本 Run 的目录元数据审批；确认文件后，
    Agent 再创建精确 `(Run, resource, recipient)` 审批。若文件已附加，则直接进入这一步。
    Alice 批准后，Bouncer 记录 `resource:forward = allow / USER_INTENT_BOUND_FORWARD`，后端
@@ -101,6 +102,9 @@ Alice 打开 `Case`，附加 `Alice — Private Interview Notes` 并要求总结
 
 Alice 不附加资料，询问“我有哪些资料”。批准目录元数据申请；随后点名一份资料并批准读取。
 展示目录批准没有自动授予正文权限。
+
+完整文字状态机见 [docs/PROTECTED_RESOURCE_FLOW.md](docs/PROTECTED_RESOURCE_FLOW.md)。流程图和
+PDF 将在该文字流程验收后再统一更新。
 
 ### 1:20–2:00：明确转发
 
@@ -139,7 +143,12 @@ Codex CLI 已包含在 Runtime 镜像中，本机无需单独安装。
 
 ### 1. 配置模型
 
-在仓库根目录创建 `.env`。使用 Volcengine Ark：
+最方便的本地验收方式是不预先配置密钥，直接运行 `npm run poc`。平台启动后登录，页面会自动
+打开“配置模型即可开始”，依次填写 API Key、模型 ID 和 Responses API 根地址。NUS SOCaaS
+已提供预设；也可以选择 Volcengine Ark 或任意兼容服务。浏览器提交的密钥只保存在当前服务
+进程内，不写入项目数据库、不返回前端，服务重启后需要重新填写。
+
+部署者也可以用 Git 忽略的 `.env` 预置全实例配置。使用 Volcengine Ark：
 
 ```dotenv
 ARK_API_KEY=your-api-key
@@ -156,8 +165,8 @@ NUS_URL=https://soclaas-api.comp.nus.edu.sg/v1
 ```
 
 `.env` 已被 Git 忽略。不要把真实密钥写入源码、日志、截图或提交记录。
-正式演示应提前配置 `.env`，现场只运行一条启动命令。若交互式终端没有读取到配置，
-启动脚本才会提供供应商无关的隐藏输入；输入不会回显或写入磁盘。
+网页配置适合本地验收和单实例演示；共享生产实例应由部署者预置凭据，避免多个访问者互相
+替换实例级模型配置。切换配置前平台会要求先结束或停止正在运行/等待审批的 Run。
 
 ### 2. 启动
 

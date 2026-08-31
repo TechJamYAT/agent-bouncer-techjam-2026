@@ -17,6 +17,23 @@ const loginBody = z.object({
   username: z.string().trim().min(1).max(80),
   password: z.string().min(1).max(128),
 });
+const modelRuntimeConfigurationBody = z.object({
+  apiKey: z.string().trim().min(8).max(4_096)
+    .refine((value) => !value.startsWith("replace-"), "Enter a real API key"),
+  model: z.string().trim().min(1).max(200)
+    .refine((value) => !value.includes("replace-"), "Enter a real model ID"),
+  baseUrl: z.string().trim().url().max(2_000),
+}).strict().superRefine((value, context) => {
+  const url = new URL(value.baseUrl);
+  const localHttpHosts = new Set(["localhost", "127.0.0.1", "::1", "host.docker.internal"]);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && localHttpHosts.has(url.hostname))) {
+    context.addIssue({
+      code: "custom",
+      path: ["baseUrl"],
+      message: "Use HTTPS, or HTTP only for a local model endpoint",
+    });
+  }
+});
 const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   role: z.string().trim().min(1).max(120).optional(),
@@ -275,7 +292,11 @@ export async function createApp(
     return { ok: true };
   });
 
-  app.get("/api/system", async () => service.systemInfo());
+  app.get("/api/system", async (request) => service.systemInfo(requireUser(request).id));
+  app.put("/api/system/model-runtime", async (request) => {
+    const body = modelRuntimeConfigurationBody.parse(request.body);
+    return service.configureModelRuntime(requireUser(request).id, body);
+  });
   app.get("/api/users", async () => ({ users: service.listUsers() }));
 
   app.get("/api/groups", async (request) => ({ groups: service.listGroups(requireUser(request).id) }));

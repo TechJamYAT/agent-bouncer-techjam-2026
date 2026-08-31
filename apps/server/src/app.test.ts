@@ -24,6 +24,7 @@ async function makeApp(
   authToken = "",
   nodeEnv: "test" | "production" = "test",
   runnerOverride?: AgentRunner,
+  environment: NodeJS.ProcessEnv = {},
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-http-test-"));
   temporaryDirectories.push(root);
@@ -36,6 +37,7 @@ async function makeApp(
     CODEX_HOME: path.join(root, "codex"),
     ARK_API_KEY: "test-key",
     ARK_MODEL: "ep-test",
+    ...environment,
   });
   const runner: AgentRunner = runnerOverride ?? {
     run: async () => ({ output: "done", threadId: "test-thread", usage: null }),
@@ -75,6 +77,122 @@ async function login(
 }
 
 describe("HTTP boundary", () => {
+  it("lets an authenticated visitor configure a generic model Runtime without returning the secret", async () => {
+    const { app, service } = await makeApp("", "test", undefined, {
+      ARK_API_KEY: "",
+      ARK_MODEL: "",
+    });
+    const cookie = await login(app);
+
+    const initial = await app.inject({
+      method: "GET",
+      url: "/api/system",
+      headers: { cookie },
+    });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toMatchObject({
+      arkConfigured: false,
+      modelConfigurationSource: null,
+      modelConfigurationEditable: true,
+    });
+
+    const withoutSession = await app.inject({
+      method: "PUT",
+      url: "/api/system/model-runtime",
+      payload: {
+        apiKey: "visitor-secret-key",
+        model: "qwen3.6:27b",
+        baseUrl: "https://soclaas-api.comp.nus.edu.sg/v1",
+      },
+    });
+    expect(withoutSession.statusCode).toBe(401);
+
+    const configured = await app.inject({
+      method: "PUT",
+      url: "/api/system/model-runtime",
+      headers: { cookie },
+      payload: {
+        apiKey: "visitor-secret-key",
+        model: "qwen3.6:27b",
+        baseUrl: "https://soclaas-api.comp.nus.edu.sg/v1/",
+      },
+    });
+    expect(configured.statusCode).toBe(200);
+    expect(configured.json()).toMatchObject({
+      arkConfigured: true,
+      arkModel: "qwen3.6:27b",
+      arkBaseUrl: "https://soclaas-api.comp.nus.edu.sg/v1",
+      modelProvider: "OpenAI-compatible Responses API",
+      modelConfigurationSource: "browser",
+      modelConfigurationEditable: true,
+    });
+    expect(configured.body).not.toContain("visitor-secret-key");
+
+    const bobCookie = await login(app, undefined, "bob");
+    const otherUserOverride = await app.inject({
+      method: "PUT",
+      url: "/api/system/model-runtime",
+      headers: { cookie: bobCookie },
+      payload: {
+        apiKey: "bob-secret-key",
+        model: "qwen3.6:27b",
+        baseUrl: "https://soclaas-api.comp.nus.edu.sg/v1",
+      },
+    });
+    expect(otherUserOverride.statusCode).toBe(403);
+
+    const agents = await app.inject({
+      method: "GET",
+      url: "/api/agents",
+      headers: { cookie },
+    });
+    const agentId = (agents.json() as { agents: Array<{ id: string }> }).agents[0]!.id;
+    const launched = await app.inject({
+      method: "POST",
+      url: `/api/agents/${agentId}/messages`,
+      headers: { cookie },
+      payload: { content: "Reply with a short readiness confirmation." },
+    });
+    expect(launched.statusCode).toBe(202);
+    const launchedRunId = (launched.json() as { run: { id: string } }).run.id;
+    await expect.poll(() => service.getRun(launchedRunId).status).toBe("completed");
+
+    const unsafeUrl = await app.inject({
+      method: "PUT",
+      url: "/api/system/model-runtime",
+      headers: { cookie },
+      payload: {
+        apiKey: "another-secret-key",
+        model: "model-id",
+        baseUrl: "http://api.example.com/v1",
+      },
+    });
+    expect(unsafeUrl.statusCode).toBe(400);
+  });
+
+  it("does not let a visitor override deployer-managed model credentials", async () => {
+    const { app } = await makeApp();
+    const cookie = await login(app);
+    const system = await app.inject({ method: "GET", url: "/api/system", headers: { cookie } });
+    expect(system.json()).toMatchObject({
+      arkConfigured: true,
+      modelConfigurationSource: "environment",
+      modelConfigurationEditable: false,
+    });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/system/model-runtime",
+      headers: { cookie },
+      payload: {
+        apiKey: "visitor-secret-key",
+        model: "another-model",
+        baseUrl: "https://api.example.com/v1",
+      },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
   it("requires both the optional platform token and a user session", async () => {
     const { app } = await makeApp("a-strong-test-token");
     const authorization = "Bearer a-strong-test-token";

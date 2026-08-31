@@ -58,9 +58,10 @@ Updated 2026-08-28. This file records verified behavior, not aspirational design
   may approve metadata-only access to their own titles, kinds, and creation times
   for one Run; this does not grant content access. Exact references are blindly
   resolved and missing/inaccessible names fail identically.
-- Unattached exact private resources create owner read requests; approvals issue
-  Run-scoped read grants and resume with a fresh credential. Catalog approval and
-  a later read or forward approval may occur sequentially in one logical Run.
+- Unattached private-resource content requests first create metadata-only catalog
+  approval even when the prompt names an exact title. After catalog approval, a
+  separate read, disclosure, or forward approval may occur sequentially in the
+  same logical Run. Attachments grant read only for the exact attached file.
 - Access-request creation atomically moves the Run to `waiting_for_approval`.
   Fast decisions that arrive before the active Agent turn exits remain queued
   and resume exactly once. Approved continuations add a final-action evidence
@@ -73,6 +74,9 @@ Updated 2026-08-28. This file records verified behavior, not aspirational design
   capability; delivery is one-time and performed directly by the control plane.
 - Initial chat entry scrolls to the newest message without pulling a user who has
   scrolled upward back to the bottom.
+- The local POC can start without model credentials. Authenticated visitors can
+  configure an OpenAI-compatible API key, model ID, and base URL in the Web UI;
+  the key remains in server memory and is not persisted or returned.
 
 ## Partial
 

@@ -15,6 +15,7 @@ import { AuthorizationEvidenceWindow } from "./AuthorizationEvidenceWindow";
 import { AccessRequestCard } from "./AccessRequestCard";
 import { MarkdownContent } from "./MarkdownContent";
 import { RuntimeProcessWindow } from "./RuntimeProcessWindow";
+import { RuntimeSetupModal } from "./RuntimeSetupModal";
 import { LanguageToggle, useI18n } from "./i18n";
 import {
   GroupWorkspace,
@@ -132,6 +133,7 @@ export default function App() {
   const [directConversations, setDirectConversations] = useState<DirectConversationSummary[]>([]);
   const [selectedHumanPeerId, setSelectedHumanPeerId] = useState<string | null>(null);
   const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [showRuntimeSetup, setShowRuntimeSetup] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null | undefined>(undefined);
   const [resources, setResources] = useState<ProtectedResource[]>([]);
@@ -372,6 +374,10 @@ export default function App() {
       mountedRef.current = false;
     };
   }, [bootstrap]);
+
+  useEffect(() => {
+    if (system && !system.arkConfigured) setShowRuntimeSetup(true);
+  }, [system]);
 
   useEffect(() => {
     setActiveRun(null);
@@ -1004,9 +1010,14 @@ export default function App() {
           <span className="eyebrow">Runtime</span>
           <strong>{system?.runtime ?? t("检查中…", "Checking…")}</strong>
           <span>
-            {system?.arkModel ?? t("未配置 Ark 模型", "Ark model not configured")}
+            {system?.arkModel ?? t("未配置模型", "Model not configured")}
             {system?.containerEngine ? " · " + system.containerEngine : ""}
           </span>
+          {system?.modelConfigurationEditable && (
+            <button type="button" onClick={() => setShowRuntimeSetup(true)}>
+              {system.arkConfigured ? t("更换模型配置", "Change model setup") : t("配置 API Key", "Configure API key")}
+            </button>
+          )}
         </div>
         <div className="user-card">
           <div className="user-avatar">{currentUser.displayName.slice(0, 1)}</div>
@@ -1026,12 +1037,17 @@ export default function App() {
               <strong>{t("需要配置 Runtime", "Runtime configuration needed")}</strong>
               <p>
                 {!system?.arkConfigured
-                  ? t("使用 Playground 前，请在 .env 中设置 ARK_API_KEY 和 ARK_MODEL。", "Set ARK_API_KEY and ARK_MODEL in .env before using the Playground.")
+                  ? t("填写 API Key、模型 ID 和 API 地址后即可使用；也可以由部署者通过 .env 预置。", "Enter an API key, model ID, and API URL to start, or let the deployer preconfigure them through .env.")
                   : system.runtimeProvider === "container"
                     ? t("本地容器引擎或 Agent Runtime 镜像不可用，请重新运行 npm run poc。", "The local container engine or Agent Runtime image is unavailable. Rerun npm run poc.")
                     : t("未找到 Codex CLI，请使用 Docker 镜像或安装 @openai/codex。", "Codex CLI was not found. Use the Docker image or install @openai/codex.")}
               </p>
             </div>
+            {!system?.arkConfigured && (
+              <button className="button button-primary" onClick={() => setShowRuntimeSetup(true)}>
+                {t("立即配置", "Configure now")}
+              </button>
+            )}
           </div>
         ) : null}
 
@@ -1588,6 +1604,19 @@ export default function App() {
             <div className="modal-footer"><button type="button" className="button button-ghost" onClick={() => setShowCreateGroup(false)}>{t("取消", "Cancel")}</button><button className="button button-primary" disabled={busy || !groupName.trim()}>{busy ? <Spinner /> : t("创建群组", "Create group")}</button></div>
           </form>
         </div>
+      )}
+
+      {showRuntimeSetup && (
+        <RuntimeSetupModal
+          system={system}
+          required={Boolean(system && !system.arkConfigured)}
+          onConfigured={(configured) => {
+            setSystem(configured);
+            setShowRuntimeSetup(false);
+            setError(null);
+          }}
+          onClose={() => setShowRuntimeSetup(false)}
+        />
       )}
     </div>
   );

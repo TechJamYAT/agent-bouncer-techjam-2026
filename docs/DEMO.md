@@ -8,7 +8,8 @@ while missing references and Bob-owned data fail closed in the trusted backend.
 
 ## Before judging
 
-1. Configure a Git-ignored `.env`; never enter or show a key during the demo.
+1. Either configure a Git-ignored `.env` before recording, or use the in-app
+   Runtime setup before screen sharing. Never show a real key to judges.
 2. Run `npm run check` and keep the successful summary available.
 3. Start isolated demo data with `npm run demo:fresh`.
 4. Confirm the model endpoint and Runtime are warm.
@@ -18,9 +19,9 @@ while missing references and Bob-owned data fail closed in the trusted backend.
 
 ### 0:00–0:25 — State the problem
 
-> An Agent starts with no private catalog. It may request metadata for the
-> initiating human, then an exact read or forward. An unattached forward must pass
-> through catalog confirmation before its recipient-bound approval. Each approval
+> An Agent starts with no private catalog. Any un-attached content use first
+> requires metadata approval, then a separate exact read, disclosure, or forward
+> approval. Each approval
 > is action-bound, Run-bound, and independently auditable.
 
 ### 0:25–0:55 — Normal read
@@ -38,15 +39,18 @@ approval is required.
 
 ### 0:55–1:25 — Catalog then read
 
-Start a new Run without an attachment and ask:
+Start a new Run without an attachment and ask for the catalog. After approving
+the metadata-only list, continue in the same Run by naming the exact file and
+asking for a summary:
 
 ```text
 请查看我有哪些资料
 ```
 
-Approve the metadata-only catalog card. Point out that it returns titles, kinds,
-and creation times but no content. Then name one exact resource and approve the
-separate read card.
+Point out that the catalog returns titles, kinds, and creation times but no
+content. Approve the separate read card. The same two stages are required even
+when an un-attached request initially includes an exact title; the backend does
+not treat user text as catalog authorization.
 
 ### 1:25–2:00 — Explicit owner-authorized forward
 
@@ -123,13 +127,16 @@ Finish with:
 Catalog, read, disclosure, and forward requests appear as action-specific cards
 in the main conversation. Approval resumes the same logical Run with a fresh
 credential; rejection or timeout resumes without access or delivery. Multiple
-stages may occur in one Run, such as catalog approval followed by forward approval.
+stages may occur in one Run, such as catalog approval followed by read,
+disclosure, or forward approval. An attachment skips catalog/read approval only
+for the exact attached file; disclosure and forwarding remain separate actions.
 
 ## Go/no-go checklist
 
 - [ ] Alice's attached resource reads without a duplicate confirmation.
 - [ ] Catalog approval returns metadata only and does not authorize content.
-- [ ] A named, unattached resource pauses for an exact read approval.
+- [ ] A named, unattached content request pauses first for catalog approval and
+      then for a separate exact read or disclosure approval.
 - [ ] An unattached forward requires catalog approval before its forward card.
 - [ ] A nonexistent title returns `RESOURCE_REFERENCE_UNAVAILABLE` with no card.
 - [ ] Alice's exact resource reaches Bob only after owner approval and
